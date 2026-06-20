@@ -1,0 +1,8 @@
+https://github.com/hamdiboukamcha/RF-DETR-CPP-TENSORRT
+https://github.com/olibartfast/rf-detr-cpp-inference
+https://github.com/mudler/rf-detr.cpp
+https://github.com/yeokiwi/Rf_detr_cpp
+https://github.com/mohamedsamirx/RF-DETR-TensorRT-CPP
+https://github.com/Ar-Ray-code/rf_detr_ros_cpp
+https://github.com/zz990099/rf_detr_cpp
+https://github.com/K4HVH/RF-DETR-ONNXRuntime-CPP
