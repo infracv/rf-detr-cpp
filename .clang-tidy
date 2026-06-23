@@ -1,0 +1,20 @@
+---
+Checks: >
+  bugprone-*,
+  modernize-*,
+  performance-*,
+  readability-*,
+  cppcoreguidelines-*,
+  -modernize-use-trailing-return-type,
+  -readability-magic-numbers,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+  -cppcoreguidelines-pro-type-reinterpret-cast,
+  -cppcoreguidelines-owning-memory,
+  -bugprone-easily-swappable-parameters,
+  -readability-identifier-length
+WarningsAsErrors: ''
+HeaderFilterRegex: '.*include/rfdetr/.*'
+FormatStyle: file
+...

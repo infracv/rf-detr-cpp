@@ -1,0 +1,105 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Format check (no GPU required) ─────────────────────────────────────────
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format-17
+      - name: check formatting
+        run: |
+          shopt -s globstar nullglob
+          files=()
+          for ext in hpp cpp cu cuh h; do
+            for f in include/**/*.$ext src/**/*.$ext apps/**/*.$ext tests/**/*.$ext; do
+              [[ -f "$f" ]] && files+=("$f")
+            done
+          done
+          if [[ ${#files[@]} -gt 0 ]]; then
+            clang-format-17 --dry-run --Werror "${files[@]}"
+          else
+            echo "no source files to check yet"
+          fi
+
+  # ── GPU build (self-hosted runner with CUDA + TensorRT) ────────────────────
+  # Register a runner at https://github.com/<org>/<repo>/settings/actions/runners
+  # with labels: self-hosted, linux, x64, gpu
+  #
+  # Required env vars on the runner (set via runner .env or GitHub secrets):
+  #   TENSORRT_DIR   — path to TensorRT root (contains include/ and lib/)
+  #   CUDA_ARCHS     — e.g. "120" for RTX 50xx; default "87;101;120"
+  build-x86_64:
+    runs-on: [self-hosted, linux, x64, gpu]
+    if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'gpu-test')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: configure
+        run: |
+          cmake -B build -S . \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DTENSORRT_DIR="${TENSORRT_DIR:-/usr/local/tensorrt}" \
+            -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHS:-87;101;120}" \
+            -DRFDETR_BUILD_APPS=ON \
+            -DRFDETR_BUILD_BENCHMARKS=ON \
+            -DRFDETR_BUILD_C_API=ON
+
+      - name: build
+        run: cmake --build build -j$(nproc)
+
+      - name: smoke test
+        run: |
+          # Export ONNX (downloads pretrained weights on first run).
+          source .venv/bin/activate 2>/dev/null || true
+          python trt-files/scripts/export_onnx.py \
+              --variant nano --out-dir trt-files/onnx || true
+
+          # Build engine if ONNX export succeeded.
+          if [[ -f trt-files/onnx/rf-detr-nano.onnx ]]; then
+            ./build/rfdetr_build \
+                --onnx trt-files/onnx/rf-detr-nano.onnx \
+                --precision fp32
+            ./build/rfdetr_smoke \
+                trt-files/onnx/rf-detr-nano-fp32.engine 5
+          fi
+
+  # ── Benchmark (stub — fills results/ after build job) ─────────────────────
+  benchmark:
+    needs: build-x86_64
+    runs-on: [self-hosted, linux, x64, gpu]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: run benchmarks
+        run: |
+          if [[ -f benchmarks/scripts/run_all.sh && -f ./build/rfdetr_bench ]]; then
+            chmod +x benchmarks/scripts/run_all.sh
+            ./benchmarks/scripts/run_all.sh \
+                --engine-dir trt-files/onnx \
+                --image      test_img.jpg \
+                --device     ci-runner \
+                --out-dir    benchmarks/results \
+                --bench      ./build/rfdetr_bench \
+                --warmup     10 \
+                --iters      100
+          else
+            echo "skipping benchmarks: binary or script not found"
+          fi
+
+      - name: upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmarks/results/*.json
+          if-no-files-found: warn

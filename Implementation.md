@@ -333,6 +333,13 @@ Incremental milestones. Each step ends with something runnable, and we don't mov
 - `core/trt_session.{hpp,cpp}`: load engine, parse bindings, allocate device buffers + pinned host buffers, owns `cudaStream_t`. Methods: `setInput(host_ptr, bytes)`, `infer()`, `getOutput(idx, host_ptr, bytes)`. Sync-copy first; async + graph capture later.
 - Unit test: feed a numpy-saved fixture input → run `infer()` → bit-exact compare outputs against a Python ORT reference within FP32 tolerance.
 
+**Step 2.5 — C++ ONNX → engine builder (`rfdetr_build`)**
+- `apps/rfdetr_build.cpp`: pure-C++ replacement for `build_engine.py`. Uses `nvonnxparser` + `IBuilder` + `IBuilderConfig` to consume an `.onnx` and write a `.engine` plus its sidecar JSON. Supports FP32/FP16, configurable workspace, optional optimization profile for dynamic batch.
+- Reads the ONNX sidecar produced by `export_onnx.py` to propagate variant metadata; can also synthesize a minimal sidecar from network introspection if none is supplied.
+- Goal: keep the runtime stack pure C++. The user only needs the upstream `rfdetr` Python package (or a Roboflow-published ONNX) to obtain the `.onnx`; everything from that point on is C++. INT8 + custom calibration stays in Python (Step 9) where image preprocessing already exists in numpy form.
+- `build_engine.py` is retained as a thin alternative for users comfortable with `trtexec` flags, but `rfdetr_build` is the recommended path documented in the README.
+
+
 **Step 3 — CUDA preprocess kernel**
 - `core/cuda_preprocess.cu` `squareResizeNormalizeKernel(uint8_t* src_bgr, int sH, int sW, float* dst_chw, int R, float3 mean, float3 inv_std, bool swap_to_rgb)`. Fused: bilinear resize → optional BGR→RGB → `pixel/255` → `(x − μ)/σ` → planar CHW write.
 - Pinned-host upload of source `cv::Mat`, `cudaMemcpyAsync`, kernel, `cudaStreamSynchronize` before infer.

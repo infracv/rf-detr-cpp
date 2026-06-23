@@ -1,0 +1,67 @@
+version: "3.9"
+
+# rf-detr-cpp Docker Compose
+#
+# Usage:
+#   # x86_64 dev environment (GPU required):
+#   docker compose run --rm x86_dev bash
+#
+#   # Inside container:
+#   python trt-files/scripts/export_onnx.py --variant nano --out-dir trt-files/onnx
+#   ./build/rfdetr_build --onnx trt-files/onnx/rf-detr-nano.onnx
+#   ./build/rfdetr_detect --engine trt-files/onnx/rf-detr-nano-fp32.engine \
+#                         --image test_img.jpg --out out/result.jpg
+
+services:
+  # ── x86_64 dev container ────────────────────────────────────────────────────
+  x86_dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.x86_64
+      target: dev
+    image: rfdetr-cpp:dev
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+    volumes:
+      # Mount host trt-files and out so engines/results persist across runs.
+      - ../trt-files:/workspace/trt-files
+      - ../out:/workspace/out
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+
+  # ── x86_64 prod container (binaries only) ───────────────────────────────────
+  x86_prod:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.x86_64
+      target: prod
+    image: rfdetr-cpp:prod
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+    volumes:
+      - ../trt-files:/workspace/trt-files
+      - ../out:/workspace/out
+    working_dir: /workspace
+
+  # ── Jetson container ─────────────────────────────────────────────────────────
+  # Run on-device or via QEMU (--platform linux/arm64) on x86.
+  jetson:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.jetson
+    image: rfdetr-cpp:jetson
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+    volumes:
+      - ../trt-files:/workspace/trt-files
+      - ../out:/workspace/out
+    working_dir: /workspace
+    stdin_open: true
+    tty: true

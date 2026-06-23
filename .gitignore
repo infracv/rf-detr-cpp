@@ -1,0 +1,38 @@
+# Build outputs
+build/
+build-*/
+out/
+.cache/
+CMakeUserPresets.json
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+.cursor/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Models / engines (too large for git; reproduce via trt-files/scripts/)
+*.onnx
+*.engine
+*.plan
+*.calib
+
+trt-files/onnx/*
+!trt-files/onnx/.gitkeep
+trt-files/engines/*
+!trt-files/engines/.gitkeep
+benchmarks/coco_subset/images/*
+!benchmarks/coco_subset/images/.gitkeep
+benchmarks/results/*
+!benchmarks/results/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db

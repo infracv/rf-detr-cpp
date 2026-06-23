@@ -1,0 +1,19 @@
+---
+BasedOnStyle: Google
+ColumnLimit: 100
+DerivePointerAlignment: false
+PointerAlignment: Left
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+AccessModifierOffset: -3
+NamespaceIndentation: None
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+BreakBeforeBraces: Attach
+SpacesBeforeTrailingComments: 2
+IncludeBlocks: Preserve
+SortIncludes: CaseSensitive
+Standard: c++17
+...

@@ -1,0 +1,66 @@
+# rf-detr-cpp — Jetson build image (JetPack 6.x)
+#
+# Targets Orin NX (CC 8.7) and AGX Thor (CC 10.1).
+# TensorRT is pre-installed by JetPack; this image builds the C++ library
+# and apps on top of the l4t-tensorrt base.
+#
+# Build:
+#   docker build -f docker/Dockerfile.jetson -t rfdetr-cpp:jetson .
+#
+# Run (must be on-device or with --platform linux/arm64 on x86 + QEMU):
+#   docker run --runtime nvidia --rm -it \
+#       -v $(pwd)/trt-files:/workspace/trt-files \
+#       -v $(pwd)/out:/workspace/out \
+#       rfdetr-cpp:jetson bash
+#
+# CUDA architectures:
+#   Orin NX / Orin AGX : 87
+#   AGX Thor            : 101
+#   Both together       : 87;101  (default below — build both in one image)
+#
+# JetPack version matrix:
+#   JetPack 6.0  → L4T 36.2  → CUDA 12.2  → TRT 8.6 (incompatible, use JP 6.1+)
+#   JetPack 6.1  → L4T 36.3  → CUDA 12.4  → TRT 10.3
+#   JetPack 6.2  → L4T 36.4  → CUDA 12.6  → TRT 10.6
+#   JetPack 7.0+ → L4T 37.x  → CUDA 12.8  → TRT 11.x (AGX Thor / Orin)
+
+ARG L4T_VERSION=36.4.0
+
+FROM nvcr.io/nvidia/l4t-tensorrt:r${L4T_VERSION}-devel AS base
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        cmake \
+        ninja-build \
+        git \
+        wget \
+        ca-certificates \
+        libopencv-dev \
+        libopencv-contrib-dev \
+        python3-pip \
+        python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# uv for fast Python dep install.
+RUN pip3 install --no-cache-dir uv
+
+WORKDIR /workspace
+COPY . /workspace/
+
+# Install Python export deps.
+RUN uv venv --python python3 .venv \
+    && .venv/bin/pip install --no-cache-dir -r requirements.txt
+
+# Build for both Orin (CC 87) and AGX Thor (CC 101).
+# Override at build time: --build-arg CUDA_ARCHS=87
+ARG CUDA_ARCHS="87;101"
+
+RUN cmake -B build -S . \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DRFDETR_BUILD_APPS=ON \
+        -DRFDETR_BUILD_C_API=ON \
+        -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHS}" \
+    && cmake --build build -j$(nproc)
+
+CMD ["/bin/bash"]
