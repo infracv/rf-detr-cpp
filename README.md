@@ -1,3 +1,4 @@
+<img width="1540" height="324" alt="RF-DETR CPP" src="https://github.com/user-attachments/assets/2b21c5d5-2ba7-498d-94f1-fe3f8e2bf871" />
 <h1 align="center">RF-DETR C++</h1>
 <h3 align="center">Production-Ready RF-DETR Inference Engine for C++ / TensorRT</h3>
 
@@ -19,9 +20,6 @@
   <img src="https://img.shields.io/badge/license-Apache--2.0-ef4444" alt="License"/>
 </p>
 
-<p align="center">
-  <img src="asset/RF-DETR CPP.png" alt="RF-DETR C++" width="100%"/>
-</p>
 
 ---
 
