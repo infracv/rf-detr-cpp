@@ -34,10 +34,6 @@ struct BindingInfo {
 
 // Owns a TRT runtime, engine, execution context, per-binding device + pinned-host
 // buffers, and a CUDA stream. Does sync inference (H2D -> enqueueV3 -> D2H + sync).
-//
-// Async overlap and CUDA Graph capture come in step 6. Optimization profiles for
-// dynamic batch come in step 8 — for now `set_input_shape` works on dynamic engines
-// but the smoke flow assumes static shapes.
 class TrtSession {
    public:
     explicit TrtSession(const std::filesystem::path& engine_path,
@@ -84,7 +80,7 @@ class TrtSession {
 
     cudaStream_t stream() const noexcept { return stream_; }
 
-    // Exposed for CUDA Graph capture in step 6 (internal use only).
+    // Internal use — CUDA Graph capture.
     nvinfer1::IExecutionContext* context() const noexcept { return context_.get(); }
 
     // Helpers callers may want.

@@ -5,6 +5,7 @@
 //   rfdetr_run --engine ENGINE --image IMAGE [--meta META]
 //              [--threshold 0.5] [--out out.jpg] [--iters 1]
 
+#include "cli_helpers.hpp"
 #include "rfdetr/core/coco_classes.hpp"
 #include "rfdetr/core/cuda_check.hpp"
 #include "rfdetr/core/cuda_preprocess.cuh"
@@ -44,21 +45,6 @@ void usage(const char* a0) {
                  a0, rfdetr::version());
 }
 
-bool starts_with(std::string_view s, std::string_view p) {
-    return s.size() >= p.size() && s.compare(0, p.size(), p) == 0;
-}
-
-const char* next_value(int argc, char** argv, int& i, std::string_view flag) {
-    std::string_view a = argv[i];
-    if (a.size() > flag.size() + 1 && a[flag.size()] == '=') {
-        return argv[i] + flag.size() + 1;
-    }
-    if (i + 1 >= argc) {
-        throw std::runtime_error("missing value for " + std::string(flag));
-    }
-    return argv[++i];
-}
-
 Args parse(int argc, char** argv) {
     Args a;
     for (int i = 1; i < argc; ++i) {
@@ -68,8 +54,8 @@ Args parse(int argc, char** argv) {
         else if (starts_with(arg, "--image"))     a.image  = next_value(argc, argv, i, "--image");
         else if (starts_with(arg, "--meta"))      a.meta   = next_value(argc, argv, i, "--meta");
         else if (starts_with(arg, "--out"))       a.out    = next_value(argc, argv, i, "--out");
-        else if (starts_with(arg, "--threshold")) a.threshold = std::stof(next_value(argc, argv, i, "--threshold"));
-        else if (starts_with(arg, "--iters"))     a.iters  = std::atoi(next_value(argc, argv, i, "--iters"));
+        else if (starts_with(arg, "--threshold")) a.threshold = parse_float(next_value(argc, argv, i, "--threshold"), "--threshold");
+        else if (starts_with(arg, "--iters"))     a.iters  = parse_int(next_value(argc, argv, i, "--iters"), "--iters");
         else throw std::runtime_error("unknown arg: " + std::string(arg));
     }
     if (a.engine.empty() || a.image.empty()) {
@@ -94,7 +80,6 @@ int main(int argc, char** argv) {
     }
 
     try {
-        // 1. Load image (BGR, uint8).
         cv::Mat image = cv::imread(args.image.string(), cv::IMREAD_COLOR);
         if (image.empty()) {
             std::fprintf(stderr, "error: could not read image: %s\n", args.image.c_str());
@@ -102,14 +87,13 @@ int main(int argc, char** argv) {
         }
         std::printf("image: %s  %dx%d\n", args.image.c_str(), image.cols, image.rows);
 
-        // 2. Open engine + meta.
         rfdetr::TrtSession sess(args.engine);
         rfdetr::EngineMeta meta;
         if (std::filesystem::is_regular_file(args.meta)) {
             meta = rfdetr::EngineMeta::from_json_file(args.meta);
-            std::printf("meta:  variant=%s  HxW=%dx%d  num_queries=%d  num_classes=%d  has_masks=%d\n",
+            std::printf("meta:  variant=%s  HxW=%dx%d  num_queries=%d  num_classes=%d\n",
                         meta.variant.c_str(), meta.input_h, meta.input_w, meta.num_queries,
-                        meta.num_classes, meta.has_masks ? 1 : 0);
+                        meta.num_classes);
         } else {
             std::fprintf(stderr, "warning: no meta sidecar at %s — assuming defaults\n",
                          args.meta.c_str());
@@ -126,8 +110,6 @@ int main(int argc, char** argv) {
             throw std::runtime_error("non-square inputs are not supported yet");
         }
 
-        // 3. Resolve output bindings (RF-DETR canonical names: "dets" + "labels"
-        //    plus "masks" for seg). Fall back to first 2/3 outputs if names differ.
         const rfdetr::BindingInfo* b_dets   = sess.find("dets");
         const rfdetr::BindingInfo* b_labels = sess.find("labels");
         if (!b_dets || !b_labels) {
@@ -142,9 +124,8 @@ int main(int argc, char** argv) {
         const int C = b_labels->shape.d[b_labels->shape.nbDims - 1];
         std::printf("output: dets=[*,%d,4]  labels=[*,%d,%d]\n", N, N, C);
 
-        // 4. Preprocess + infer + postprocess timing loop.
         rfdetr::ImagePreprocessor prep(meta.input_h,
-                                       /*src_is_bgr=*/meta.color_order != "BGR");
+                                       /*bgr_to_rgb=*/meta.color_order == "RGB");
         prep.set_mean(meta.mean[0], meta.mean[1], meta.mean[2]);
         prep.set_std(meta.std[0], meta.std[1], meta.std[2]);
 
@@ -162,16 +143,16 @@ int main(int argc, char** argv) {
         // Warm-up.
         prep.process(image, d_input, sess.stream());
         sess.infer();
-        sess.get_output(b_dets->name,   dets.data(),   dets.size()   * sizeof(float));
-        sess.get_output(b_labels->name, labels.data(), labels.size() * sizeof(float));
+        sess.get_output_f32(b_dets->name,   dets.data(),   dets.size());
+        sess.get_output_f32(b_labels->name, labels.data(), labels.size());
 
         rfdetr::Detections results;
         const auto t0 = std::chrono::steady_clock::now();
         for (int k = 0; k < args.iters; ++k) {
             prep.process(image, d_input, sess.stream());
             sess.infer();
-            sess.get_output(b_dets->name,   dets.data(),   dets.size()   * sizeof(float));
-            sess.get_output(b_labels->name, labels.data(), labels.size() * sizeof(float));
+            sess.get_output_f32(b_dets->name,   dets.data(),   dets.size());
+            sess.get_output_f32(b_labels->name, labels.data(), labels.size());
             results = rfdetr::decode_detections(dets.data(), labels.data(), image.cols,
                                                 image.rows, pp);
         }
@@ -181,7 +162,6 @@ int main(int argc, char** argv) {
                     total_ms / args.iters);
         std::printf("detections (threshold=%.2f): %zu\n", args.threshold, results.size());
 
-        // 5. Print + draw.
         for (const auto& d : results) {
             const char* name = rfdetr::coco_label(d.class_id);
             std::printf("  %-15s %.3f  bbox=[%.1f, %.1f, %.1f, %.1f]\n", name, d.score,
@@ -190,6 +170,9 @@ int main(int argc, char** argv) {
 
         if (!args.out.empty()) {
             rfdetr::draw_detections(image, results, &rfdetr::coco_label);
+            std::filesystem::create_directories(args.out.parent_path().empty()
+                                                ? std::filesystem::path(".")
+                                                : args.out.parent_path());
             if (!cv::imwrite(args.out.string(), image)) {
                 std::fprintf(stderr, "error: cv::imwrite failed for %s\n", args.out.c_str());
                 return 1;

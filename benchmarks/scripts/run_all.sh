@@ -28,7 +28,6 @@ OUT_DIR="benchmarks/results"
 BENCH="./build/rfdetr_bench"
 WARMUP=50
 ITERS=500
-BATCH=1
 
 # ── Parse args ────────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -40,7 +39,6 @@ while [[ $# -gt 0 ]]; do
         --bench)      BENCH="$2";      shift 2 ;;
         --warmup)     WARMUP="$2";     shift 2 ;;
         --iters)      ITERS="$2";      shift 2 ;;
-        --batch)      BATCH="$2";      shift 2 ;;
         -h|--help)
             sed -n '2,/^$/p' "$0" | grep '^#' | sed 's/^# \?//'
             exit 0
@@ -71,7 +69,7 @@ fi
 echo "=== rfdetr benchmark run ==="
 echo "  device:     $DEVICE"
 echo "  image:      $IMAGE"
-echo "  warmup:     $WARMUP  iters: $ITERS  batch: $BATCH"
+echo "  warmup:     $WARMUP  iters: $ITERS"
 echo "  engines:    ${#ENGINES[@]}"
 echo "  output dir: $OUT_DIR"
 echo ""
@@ -84,15 +82,13 @@ for ENGINE in "${ENGINES[@]}"; do
     REPORT="${OUT_DIR}/${DEVICE}_${STEM}.json"
 
     echo "--- $STEM ---"
-    if "$BENCH" \
-        --engine  "$ENGINE" \
-        --image   "$IMAGE" \
-        --device  "$DEVICE" \
-        --warmup  "$WARMUP" \
-        --iters   "$ITERS" \
-        --batch   "$BATCH" \
-        --report  "$REPORT"; then
-        echo "    -> $REPORT"
+    if "$BENCH" image "$ENGINE" "$IMAGE" \
+        --device     "$DEVICE" \
+        --warmup     "$WARMUP" \
+        --iters      "$ITERS" \
+        --output-dir "$OUT_DIR" \
+        --json; then
+        echo "    -> $OUT_DIR"
         PASS=$((PASS + 1))
     else
         echo "    FAILED (exit $?)" >&2

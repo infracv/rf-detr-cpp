@@ -10,6 +10,7 @@
 //   - a camera index     (e.g. 0, 1)
 //   - an RTSP/HTTP URL
 
+#include "cli_helpers.hpp"
 #include "rfdetr/core/coco_classes.hpp"
 #include "rfdetr/core/drawing.hpp"
 #include "rfdetr/tasks/detector.hpp"
@@ -59,19 +60,6 @@ void usage(const char* a0) {
         a0, rfdetr::version());
 }
 
-bool starts_with(std::string_view s, std::string_view p) {
-    return s.size() >= p.size() && s.compare(0, p.size(), p) == 0;
-}
-
-const char* next_value(int argc, char** argv, int& i, std::string_view flag) {
-    std::string_view a = argv[i];
-    if (a.size() > flag.size() + 1 && a[flag.size()] == '=')
-        return argv[i] + flag.size() + 1;
-    if (i + 1 >= argc)
-        throw std::runtime_error("missing value for " + std::string(flag));
-    return argv[++i];
-}
-
 Args parse(int argc, char** argv) {
     Args a;
     for (int i = 1; i < argc; ++i) {
@@ -80,9 +68,9 @@ Args parse(int argc, char** argv) {
         else if (starts_with(arg, "--engine"))      a.engine    = next_value(argc, argv, i, "--engine");
         else if (starts_with(arg, "--input"))       a.input     = next_value(argc, argv, i, "--input");
         else if (starts_with(arg, "--out"))         a.out       = next_value(argc, argv, i, "--out");
-        else if (starts_with(arg, "--threshold"))   a.threshold = std::stof(next_value(argc, argv, i, "--threshold"));
-        else if (starts_with(arg, "--skip"))        a.skip      = std::atoi(next_value(argc, argv, i, "--skip"));
-        else if (starts_with(arg, "--max-frames"))  a.max_frames= std::atoi(next_value(argc, argv, i, "--max-frames"));
+        else if (starts_with(arg, "--threshold"))   a.threshold = parse_float(next_value(argc, argv, i, "--threshold"), "--threshold");
+        else if (starts_with(arg, "--skip"))        a.skip      = parse_int(next_value(argc, argv, i, "--skip"), "--skip");
+        else if (starts_with(arg, "--max-frames"))  a.max_frames= parse_int(next_value(argc, argv, i, "--max-frames"), "--max-frames");
         else if (arg == "--show")                   a.show       = true;
         else if (arg == "--no-fps-overlay")         a.fps_overlay= false;
         else if (arg == "--cuda-graph")             a.cuda_graph = true;
@@ -94,15 +82,11 @@ Args parse(int argc, char** argv) {
 
 // Open a cv::VideoCapture from either a numeric camera index or a file/URL.
 cv::VideoCapture open_capture(const std::string& input) {
-    // Check if the string is a pure integer (camera index).
-    bool is_index = !input.empty();
-    for (char c : input) {
-        if (c < '0' || c > '9') { is_index = false; break; }
-    }
-    if (is_index) {
-        cv::VideoCapture cap(std::stoi(input));
-        return cap;
-    }
+    try {
+        const int idx = std::stoi(input);
+        if (std::to_string(idx) == input)
+            return cv::VideoCapture(idx);
+    } catch (...) {}
     return cv::VideoCapture(input);
 }
 
@@ -133,9 +117,7 @@ void draw_hud(cv::Mat& frame, double fps, const rfdetr::RFDetrDetector::Timings&
     // Semi-transparent background.
     cv::Mat roi = frame(cv::Rect(0, 0, std::min(box_w, frame.cols),
                                        std::min(box_h, frame.rows)));
-    cv::Mat overlay = roi.clone();
-    overlay.setTo(cv::Scalar(0, 0, 0));
-    cv::addWeighted(overlay, 0.5, roi, 0.5, 0, roi);
+    roi *= 0.5;
 
     const cv::Scalar white(255, 255, 255);
     int y = pad + s1.height;

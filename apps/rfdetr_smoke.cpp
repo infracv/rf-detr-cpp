@@ -72,10 +72,11 @@ int main(int argc, char** argv) {
         }
 
         // Fill all inputs with zeros — single allocation reused per input.
+        std::vector<std::vector<std::uint8_t>> input_zeros;
         for (int i : sess.input_indices()) {
             const auto& b = sess.bindings()[i];
-            std::vector<std::uint8_t> zeros(b.bytes, 0);
-            sess.set_input(b.name, zeros.data(), zeros.size());
+            input_zeros.emplace_back(b.bytes, 0);
+            sess.set_input(b.name, input_zeros.back().data(), input_zeros.back().size());
         }
 
         // First infer = warm-up; subsequent ones average for a rough wall-clock read.
@@ -84,10 +85,10 @@ int main(int argc, char** argv) {
 
         const auto t0 = std::chrono::steady_clock::now();
         for (int k = 0; k < iters; ++k) {
-            for (int i : sess.input_indices()) {
-                const auto& b = sess.bindings()[i];
-                std::vector<std::uint8_t> zeros(b.bytes, 0);
-                sess.set_input(b.name, zeros.data(), zeros.size());
+            for (std::size_t ii = 0; ii < sess.input_indices().size(); ++ii) {
+                const int idx = sess.input_indices()[ii];
+                const auto& b = sess.bindings()[idx];
+                sess.set_input(b.name, input_zeros[ii].data(), input_zeros[ii].size());
             }
             sess.infer();
         }

@@ -4,6 +4,7 @@
 //   rfdetr_detect --engine ENGINE --image IMAGE
 //                 [--threshold 0.5] [--out PATH] [--iters 1] [--cuda-graph]
 
+#include "cli_helpers.hpp"
 #include "rfdetr/core/coco_classes.hpp"
 #include "rfdetr/core/drawing.hpp"
 #include "rfdetr/tasks/detector.hpp"
@@ -38,19 +39,6 @@ void usage(const char* a0) {
                  a0, rfdetr::version());
 }
 
-bool starts_with(std::string_view s, std::string_view p) {
-    return s.size() >= p.size() && s.compare(0, p.size(), p) == 0;
-}
-
-const char* next_value(int argc, char** argv, int& i, std::string_view flag) {
-    std::string_view a = argv[i];
-    if (a.size() > flag.size() + 1 && a[flag.size()] == '=')
-        return argv[i] + flag.size() + 1;
-    if (i + 1 >= argc)
-        throw std::runtime_error("missing value for " + std::string(flag));
-    return argv[++i];
-}
-
 Args parse(int argc, char** argv) {
     Args a;
     for (int i = 1; i < argc; ++i) {
@@ -59,8 +47,8 @@ Args parse(int argc, char** argv) {
         else if (starts_with(arg, "--engine"))    a.engine    = next_value(argc, argv, i, "--engine");
         else if (starts_with(arg, "--image"))     a.image     = next_value(argc, argv, i, "--image");
         else if (starts_with(arg, "--out"))       a.out       = next_value(argc, argv, i, "--out");
-        else if (starts_with(arg, "--threshold")) a.threshold = std::stof(next_value(argc, argv, i, "--threshold"));
-        else if (starts_with(arg, "--iters"))     a.iters     = std::atoi(next_value(argc, argv, i, "--iters"));
+        else if (starts_with(arg, "--threshold")) a.threshold = parse_float(next_value(argc, argv, i, "--threshold"), "--threshold");
+        else if (starts_with(arg, "--iters"))     a.iters     = parse_int(next_value(argc, argv, i, "--iters"), "--iters");
         else if (arg == "--cuda-graph")           a.cuda_graph = true;
         else throw std::runtime_error("unknown arg: " + std::string(arg));
     }
@@ -126,6 +114,9 @@ int main(int argc, char** argv) {
 
         if (!args.out.empty()) {
             rfdetr::draw_detections(image, results, &rfdetr::coco_label);
+            std::filesystem::create_directories(args.out.parent_path().empty()
+                                                ? std::filesystem::path(".")
+                                                : args.out.parent_path());
             if (!cv::imwrite(args.out.string(), image)) {
                 std::fprintf(stderr, "error: cv::imwrite failed: %s\n", args.out.c_str());
                 return 1;

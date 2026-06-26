@@ -25,12 +25,13 @@ endif()
 # Build options.
 option(RFDETR_BUILD_SHARED      "Build the rfdetr library as SHARED (vs STATIC)" ON)
 option(RFDETR_BUILD_APPS        "Build CLI applications under apps/"             ON)
+option(RFDETR_BUILD_EXAMPLES    "Build example programs under examples/"         OFF)
 option(RFDETR_BUILD_BENCHMARKS  "Build benchmark harness under benchmarks/"      OFF)
 option(RFDETR_BUILD_TESTS       "Build tests under tests/"                       OFF)
 option(RFDETR_BUILD_C_API       "Build C ABI (rfdetr_c) target"                  OFF)
 option(RFDETR_USE_OPENCV_CUDA   "Use OpenCV CUDA module for GPU pre/post"        OFF)
 
-list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR})
 
 find_package(CUDAToolkit REQUIRED)
 find_package(TensorRT REQUIRED)
@@ -63,7 +64,6 @@ target_sources(rfdetr
         src/core/postprocess.cpp
         src/core/drawing.cpp
         src/tasks/detector.cpp
-        src/tasks/segmenter.cpp
 )
 
 target_include_directories(rfdetr
@@ -117,9 +117,6 @@ if(RFDETR_BUILD_APPS)
     add_executable(rfdetr_batch apps/rfdetr_batch.cpp)
     target_link_libraries(rfdetr_batch PRIVATE rfdetr::rfdetr)
 
-    add_executable(rfdetr_seg apps/rfdetr_seg.cpp)
-    target_link_libraries(rfdetr_seg PRIVATE rfdetr::rfdetr)
-
     add_executable(rfdetr_bench apps/rfdetr_bench.cpp)
     target_link_libraries(rfdetr_bench PRIVATE rfdetr::rfdetr nlohmann_json::nlohmann_json CUDA::cudart)
 endif()
@@ -146,6 +143,10 @@ endif()
 # ------------------------------------------------------------------------------
 # Tests / benchmarks (placeholders, wired in later steps)
 # ------------------------------------------------------------------------------
+if(RFDETR_BUILD_EXAMPLES)
+    add_subdirectory(examples)
+endif()
+
 if(RFDETR_BUILD_TESTS)
     enable_testing()
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt)
@@ -171,6 +172,7 @@ message(STATUS "  tensorrt nvinfer:  ${TENSORRT_NVINFER_LIB}")
 message(STATUS "  opencv:            ${OpenCV_VERSION}")
 message(STATUS "  shared library:    ${RFDETR_BUILD_SHARED}")
 message(STATUS "  apps:              ${RFDETR_BUILD_APPS}")
+message(STATUS "  examples:          ${RFDETR_BUILD_EXAMPLES}")
 message(STATUS "  benchmarks:        ${RFDETR_BUILD_BENCHMARKS}")
 message(STATUS "  tests:             ${RFDETR_BUILD_TESTS}")
 message(STATUS "  c api:             ${RFDETR_BUILD_C_API}")

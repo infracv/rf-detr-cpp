@@ -32,7 +32,15 @@ benchmarks/coco_subset/images/*
 !benchmarks/coco_subset/images/.gitkeep
 benchmarks/results/*
 !benchmarks/results/.gitkeep
+!benchmarks/results/benchmark_results.csv
+
+# Internal planning (not for public repo)
+ROADMAP.md
+similar-repo/
 
 # OS
 .DS_Store
 Thumbs.db
+
+
+asset/test_video.mp4

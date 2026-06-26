@@ -17,10 +17,6 @@
 
 namespace rfdetr {
 
-// ---------------------------------------------------------------------------
-// Impl — owns all TRT/CUDA objects
-// ---------------------------------------------------------------------------
-
 struct RFDetrDetector::Impl {
     TrtSession                         session;
     EngineMeta                         meta;
@@ -39,7 +35,6 @@ struct RFDetrDetector::Impl {
     PostprocessParams pp;
     Timings           timings;
 
-    // Step 6: CUDA Graph
     bool            graph_captured{false};
     cudaGraph_t     graph{nullptr};
     cudaGraphExec_t graph_exec{nullptr};
@@ -71,13 +66,11 @@ struct RFDetrDetector::Impl {
             throw std::runtime_error("rfdetr: non-square input not supported");
         }
 
-        // Build preprocessor with correct params.
         preprocessor = std::make_unique<ImagePreprocessor>(
-            meta.input_h, /*src_is_bgr=*/meta.color_order != "BGR");
+            meta.input_h, /*bgr_to_rgb=*/meta.color_order == "RGB");
         preprocessor->set_mean(meta.mean[0], meta.mean[1], meta.mean[2]);
         preprocessor->set_std (meta.std[0],  meta.std[1],  meta.std[2]);
 
-        // Resolve output bindings.
         b_dets   = session.find("dets");
         b_labels = session.find("labels");
         if (!b_dets || !b_labels) {
@@ -100,9 +93,7 @@ struct RFDetrDetector::Impl {
         pp.threshold           = opts.threshold;
         pp.bg_class_index      = 0;
 
-        // Step 6: capture CUDA Graph if requested.
-        // The engine must be built with --cuda-graph (kCUDA_GRAPH_COMPATIBLE) for
-        // capture to succeed; check the meta flag and warn if not set.
+        // Attempt CUDA Graph capture if requested.
         if (opts.use_cuda_graph) {
             if (!meta.cuda_graph_compat) {
                 std::fprintf(stderr,
@@ -180,6 +171,11 @@ struct RFDetrDetector::Impl {
 
         // For dynamic-batch engines, update the input shape before inference.
         if (meta.dynamic_batch) {
+            if (B > meta.max_batch) {
+                throw std::runtime_error("rfdetr: detect_batch: batch size " +
+                    std::to_string(B) + " exceeds engine max_batch " +
+                    std::to_string(meta.max_batch));
+            }
             nvinfer1::Dims4 dims{B, 3, R, R};
             session.set_input_shape("input", dims);
         } else if (B != 1) {
@@ -193,7 +189,6 @@ struct RFDetrDetector::Impl {
         for (int i = 0; i < B; ++i) {
             preprocessor->process(images[i], d_input + i * single_floats, session.stream());
         }
-        RFDETR_CUDA_CHECK(cudaStreamSynchronize(session.stream()));
 
         // Single engine call covers the whole batch.
         session.infer();
@@ -260,10 +255,6 @@ struct RFDetrDetector::Impl {
         return results;
     }
 };
-
-// ---------------------------------------------------------------------------
-// RFDetrDetector public API
-// ---------------------------------------------------------------------------
 
 RFDetrDetector::RFDetrDetector(const std::filesystem::path& engine_path,
                                 const DetectorOptions& opts) {

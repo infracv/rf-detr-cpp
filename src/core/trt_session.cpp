@@ -282,12 +282,9 @@ void TrtSession::get_output_f32(std::string_view name, float* host_float32,
         RFDETR_CUDA_CHECK(cudaMemcpyAsync(host_buffers_[idx], device_buffers_[idx], b.bytes,
                                            cudaMemcpyDeviceToHost, stream_));
         RFDETR_CUDA_CHECK(cudaStreamSynchronize(stream_));
-        // Convert fp16 (stored as uint16_t) to float32.
-        // Uses the standard bit-cast trick via __half if CUDA headers are available,
-        // otherwise a portable software fallback.
+        // Portable IEEE 754 fp16->fp32 conversion.
         const auto* src = static_cast<const std::uint16_t*>(host_buffers_[idx]);
         for (std::size_t i = 0; i < element_count; ++i) {
-            // Portable IEEE 754 fp16->fp32 conversion.
             const std::uint16_t h = src[i];
             const std::uint32_t sign     = (h >> 15u) & 1u;
             const std::uint32_t exponent = (h >> 10u) & 0x1Fu;
@@ -309,9 +306,18 @@ void TrtSession::get_output_f32(std::string_view name, float* host_float32,
             }
             std::memcpy(&host_float32[i], &f, 4);
         }
+    } else if (b.dtype == nvinfer1::DataType::kINT8) {
+        // INT8 output — dequantize with fixed scale 1/128.
+        RFDETR_CUDA_CHECK(cudaMemcpyAsync(host_buffers_[idx], device_buffers_[idx], b.bytes,
+                                           cudaMemcpyDeviceToHost, stream_));
+        RFDETR_CUDA_CHECK(cudaStreamSynchronize(stream_));
+        const auto* src = static_cast<const std::int8_t*>(host_buffers_[idx]);
+        for (std::size_t i = 0; i < element_count; ++i) {
+            host_float32[i] = static_cast<float>(src[i]) * (1.0f / 128.0f);
+        }
     } else {
         throw std::runtime_error("rfdetr: get_output_f32: unsupported dtype for " +
-                                  std::string(name) + " (only fp32/fp16 supported)");
+                                  std::string(name) + " (fp32/fp16/int8 supported)");
     }
 }
 
@@ -323,11 +329,9 @@ std::size_t TrtSession::dtype_bytes(nvinfer1::DataType d) noexcept {
         case nvinfer1::DataType::kINT32: return 4;
         case nvinfer1::DataType::kBOOL:  return 1;
         case nvinfer1::DataType::kUINT8: return 1;
-#if NV_TENSORRT_MAJOR >= 9
         case nvinfer1::DataType::kFP8:   return 1;
         case nvinfer1::DataType::kBF16:  return 2;
         case nvinfer1::DataType::kINT64: return 8;
-#endif
         default: return 0;
     }
 }
@@ -350,11 +354,9 @@ const char* TrtSession::dtype_name(nvinfer1::DataType d) noexcept {
         case nvinfer1::DataType::kINT32: return "int32";
         case nvinfer1::DataType::kBOOL:  return "bool";
         case nvinfer1::DataType::kUINT8: return "uint8";
-#if NV_TENSORRT_MAJOR >= 9
         case nvinfer1::DataType::kFP8:   return "fp8";
         case nvinfer1::DataType::kBF16:  return "bf16";
         case nvinfer1::DataType::kINT64: return "int64";
-#endif
         default: return "?";
     }
 }

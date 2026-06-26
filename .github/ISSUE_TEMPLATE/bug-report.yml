@@ -1,0 +1,71 @@
+name: 🐞 Bug Report
+title: "[Bug]: "
+description: Report a bug or unexpected behavior in RF-DETR C++
+labels: [bug]
+body:
+  - type: checkboxes
+    attributes:
+      label: Search before asking
+      description: Please search [issues](https://github.com/infracv/rf-detr-cpp/issues) first to avoid duplicates.
+      options:
+        - label: I have searched existing issues and found no similar bug report.
+          required: true
+
+  - type: textarea
+    attributes:
+      label: Bug Description
+      description: What happened? What did you expect to happen?
+      placeholder: |
+        **What's the bug?**
+        Describe what went wrong.
+
+        **Expected behavior:**
+        What should have happened.
+
+        **Actual behavior:**
+        What actually happened.
+
+        **Error output (if any):**
+        ```
+        Paste build errors, TRT logs, or runtime output here
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Environment
+      description: Your hardware and software setup
+      value: |
+        - GPU:
+        - CUDA:
+        - TensorRT:
+        - OS:
+        - CMake build type (Release/Debug):
+        - Precision (fp32/fp16/int8):
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Minimal Reproducible Example
+      description: The CLI command or shortest C++ snippet that triggers the bug
+      placeholder: |
+        ```sh
+        ./build/rfdetr_detect --engine model.engine --image test.jpg
+        ```
+
+        or
+
+        ```cpp
+        rfdetr::RFDetrDetector det("model.engine");
+        auto dets = det.detect(frame, 0.5f);
+        ```
+    validations:
+      required: false
+
+  - type: checkboxes
+    attributes:
+      label: Are you willing to submit a PR?
+      options:
+        - label: Yes, I'd like to help by submitting a PR!

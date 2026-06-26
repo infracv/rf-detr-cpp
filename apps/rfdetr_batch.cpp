@@ -7,6 +7,7 @@
 //   rfdetr_batch --engine ENGINE --image IMAGE --batch N
 //                [--threshold 0.5] [--iters 20] [--out-dir DIR]
 
+#include "cli_helpers.hpp"
 #include "rfdetr/core/coco_classes.hpp"
 #include "rfdetr/core/drawing.hpp"
 #include "rfdetr/tasks/detector.hpp"
@@ -49,19 +50,6 @@ void usage(const char* a0) {
         a0, rfdetr::version());
 }
 
-bool starts_with(std::string_view s, std::string_view p) {
-    return s.size() >= p.size() && s.compare(0, p.size(), p) == 0;
-}
-
-const char* next_value(int argc, char** argv, int& i, std::string_view flag) {
-    std::string_view a = argv[i];
-    if (a.size() > flag.size() + 1 && a[flag.size()] == '=')
-        return argv[i] + flag.size() + 1;
-    if (i + 1 >= argc)
-        throw std::runtime_error("missing value for " + std::string(flag));
-    return argv[++i];
-}
-
 Args parse(int argc, char** argv) {
     Args a;
     for (int i = 1; i < argc; ++i) {
@@ -70,9 +58,9 @@ Args parse(int argc, char** argv) {
         else if (starts_with(arg, "--engine"))     a.engine    = next_value(argc, argv, i, "--engine");
         else if (starts_with(arg, "--image"))      a.image     = next_value(argc, argv, i, "--image");
         else if (starts_with(arg, "--out-dir"))    a.out_dir   = next_value(argc, argv, i, "--out-dir");
-        else if (starts_with(arg, "--threshold"))  a.threshold = std::stof(next_value(argc, argv, i, "--threshold"));
-        else if (starts_with(arg, "--batch"))      a.batch     = std::atoi(next_value(argc, argv, i, "--batch"));
-        else if (starts_with(arg, "--iters"))      a.iters     = std::atoi(next_value(argc, argv, i, "--iters"));
+        else if (starts_with(arg, "--threshold"))  a.threshold = parse_float(next_value(argc, argv, i, "--threshold"), "--threshold");
+        else if (starts_with(arg, "--batch"))      a.batch     = parse_int(next_value(argc, argv, i, "--batch"), "--batch");
+        else if (starts_with(arg, "--iters"))      a.iters     = parse_int(next_value(argc, argv, i, "--iters"), "--iters");
         else throw std::runtime_error("unknown arg: " + std::string(arg));
     }
     if (a.engine.empty() || a.image.empty()) { usage(argv[0]); std::exit(2); }
