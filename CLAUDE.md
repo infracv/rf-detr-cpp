@@ -5,3 +5,4 @@
      Cursor, Copilot, Aider, and other tools share the same guidance. -->
 
 @AGENTS.md
+

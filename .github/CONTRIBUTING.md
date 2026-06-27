@@ -61,12 +61,7 @@ git remote add upstream https://github.com/infracv/rf-detr-cpp.git
 
 ### Build
 
-```sh
-cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=120
-cmake --build build -j$(nproc)
-```
-
-Replace `120` with your GPU's compute capability. See the README for the full GPU-to-arch mapping.
+See the [README](../README.md#build-from-source) for the full build command and GPU arch table.
 
 ### Debug Builds
 

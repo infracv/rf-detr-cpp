@@ -6,7 +6,11 @@
 
 namespace rfdetr {
 
+// Bump when the JSON schema gains fields that would break older readers.
+inline constexpr int kEngineMetaSchemaVersion = 1;
+
 struct EngineMeta {
+    int schema_version{kEngineMetaSchemaVersion};
     std::string variant;            // canonical name, e.g. "small", "large"
     int input_h{0};
     int input_w{0};
@@ -24,6 +28,11 @@ struct EngineMeta {
     int opt_batch{1};
     int max_batch{1};
     bool cuda_graph_compat{false};  // meta label set by rfdetr_build --cuda-graph
+
+    // Segmentation outputs (filled for seg-* variants, zero otherwise).
+    bool has_masks{false};
+    int  mask_h{0};
+    int  mask_w{0};
 
     static EngineMeta from_json_file(const std::filesystem::path& path);
     void to_json_file(const std::filesystem::path& path) const;

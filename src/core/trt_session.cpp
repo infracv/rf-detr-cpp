@@ -1,6 +1,7 @@
-#include "rfdetr/core/trt_session.hpp"
+#include "internal/trt_session.hpp"
 
-#include "rfdetr/core/cuda_check.hpp"
+#include "internal/cuda_check.hpp"
+#include "internal/cuda_raii.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -34,7 +35,11 @@ TrtSession::TrtSession(const std::filesystem::path& engine_path,
     : logger_(log_severity) {
     load_engine_(engine_path);
     parse_bindings_();
-    RFDETR_CUDA_CHECK(cudaStreamCreate(&stream_));
+    // Non-blocking flag: defensive hygiene. Avoids implicit sync with the
+    // legacy NULL stream (stream 0) if any external library (cuBLAS without
+    // cublasSetStream, cv::cuda defaults, TRT plugins) happens to enqueue
+    // there. No measurable speedup in our pipeline; cosmetic correctness.
+    RFDETR_CUDA_CHECK(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking));
     allocate_buffers_();
     for (std::size_t i = 0; i < bindings_.size(); ++i) {
         bind_address_(static_cast<int>(i));
@@ -42,7 +47,25 @@ TrtSession::TrtSession(const std::filesystem::path& engine_path,
 }
 
 TrtSession::~TrtSession() {
+    // Destruction order matters when a CUDA context is still alive:
+    //   1) Drain any pending stream work (avoids "context is destroyed" errors
+    //      from in-flight async copies).
+    //   2) Free device + pinned host buffers BEFORE the engine/runtime — the
+    //      pinned allocator is tied to the CUDA context.
+    //   3) Destroy execution context, engine, runtime in that order. The
+    //      member declaration order in the header puts them runtime, engine,
+    //      context — and ~unique_ptr runs in reverse, so the implicit
+    //      destruction order is correct (context → engine → runtime). We
+    //      reset() explicitly here to make the order intent obvious and to
+    //      decouple it from any future field reordering.
+    //   4) Destroy the stream last.
+    if (stream_) {
+        cudaStreamSynchronize(stream_);
+    }
     free_buffers_();
+    context_.reset();
+    engine_.reset();
+    runtime_.reset();
     if (stream_) {
         cudaStreamDestroy(stream_);
         stream_ = nullptr;
@@ -101,25 +124,25 @@ void TrtSession::parse_bindings_() {
 }
 
 void TrtSession::allocate_buffers_() {
-    device_buffers_.assign(bindings_.size(), nullptr);
-    host_buffers_.assign(bindings_.size(), nullptr);
-    buffer_capacity_.assign(bindings_.size(), 0);
-    for (std::size_t i = 0; i < bindings_.size(); ++i) {
+    const std::size_t n = bindings_.size();
+    device_buffers_.resize(n);
+    host_buffers_.resize(n);
+    buffer_capacity_.assign(n, 0);
+    for (std::size_t i = 0; i < n; ++i) {
         const std::size_t bytes = bindings_[i].bytes;
         if (bytes == 0) continue;  // dynamic, deferred until set_input_shape
-        RFDETR_CUDA_CHECK(cudaMalloc(&device_buffers_[i], bytes));
-        RFDETR_CUDA_CHECK(cudaMallocHost(&host_buffers_[i], bytes));
+        void* dp = nullptr;
+        void* hp = nullptr;
+        RFDETR_CUDA_CHECK(cudaMalloc(&dp, bytes));
+        RFDETR_CUDA_CHECK(cudaMallocHost(&hp, bytes));
+        device_buffers_[i].reset(dp);
+        host_buffers_[i].reset(hp);
         buffer_capacity_[i] = bytes;
     }
 }
 
 void TrtSession::free_buffers_() noexcept {
-    for (auto* p : device_buffers_) {
-        if (p) cudaFree(p);
-    }
-    for (auto* p : host_buffers_) {
-        if (p) cudaFreeHost(p);
-    }
+    // DevPtr / HostPtr destructors handle cudaFree / cudaFreeHost automatically.
     device_buffers_.clear();
     host_buffers_.clear();
     buffer_capacity_.clear();
@@ -127,7 +150,7 @@ void TrtSession::free_buffers_() noexcept {
 
 void TrtSession::bind_address_(int idx) {
     if (!device_buffers_[idx]) return;  // dynamic, no buffer yet
-    if (!context_->setTensorAddress(bindings_[idx].name.c_str(), device_buffers_[idx])) {
+    if (!context_->setTensorAddress(bindings_[idx].name.c_str(), device_buffers_[idx].get())) {
         throw std::runtime_error("rfdetr: setTensorAddress failed for: " + bindings_[idx].name);
     }
 }
@@ -153,21 +176,19 @@ void TrtSession::update_binding_shape_(int idx, const nvinfer1::Dims& dims) {
                   : 0;
 
     if (b.bytes > buffer_capacity_[idx]) {
-        if (device_buffers_[idx]) {
-            cudaFree(device_buffers_[idx]);
-            device_buffers_[idx] = nullptr;
-        }
-        if (host_buffers_[idx]) {
-            cudaFreeHost(host_buffers_[idx]);
-            host_buffers_[idx] = nullptr;
-        }
+        // Free old buffers first (RAII reset), then re-allocate.
+        device_buffers_[idx].reset();
+        host_buffers_[idx].reset();
+        buffer_capacity_[idx] = 0;
         if (b.bytes > 0) {
-            RFDETR_CUDA_CHECK(cudaMalloc(&device_buffers_[idx], b.bytes));
-            RFDETR_CUDA_CHECK(cudaMallocHost(&host_buffers_[idx], b.bytes));
+            void* dp = nullptr;
+            void* hp = nullptr;
+            RFDETR_CUDA_CHECK(cudaMalloc(&dp, b.bytes));
+            RFDETR_CUDA_CHECK(cudaMallocHost(&hp, b.bytes));
+            device_buffers_[idx].reset(dp);
+            host_buffers_[idx].reset(hp);
             buffer_capacity_[idx] = b.bytes;
             bind_address_(idx);
-        } else {
-            buffer_capacity_[idx] = 0;
         }
     }
 }
@@ -179,6 +200,18 @@ void TrtSession::set_input_shape(std::string_view name, const nvinfer1::Dims& di
     }
     if (!bindings_[idx].is_input) {
         throw std::runtime_error("rfdetr: not an input: " + bindings_[idx].name);
+    }
+    // Skip the setInputShape + downstream re-resolve when the shape hasn't
+    // changed. setInputShape triggers profile selection and reformatter work
+    // in TRT 10/11 (documented regression in NVIDIA/TensorRT#3853), so caching
+    // it shaves a measurable chunk off per-call latency in steady-state video.
+    const nvinfer1::Dims& cur = bindings_[idx].shape;
+    if (cur.nbDims == dims.nbDims) {
+        bool same = true;
+        for (int i = 0; i < dims.nbDims; ++i) {
+            if (cur.d[i] != dims.d[i]) { same = false; break; }
+        }
+        if (same) return;
     }
     if (!context_->setInputShape(bindings_[idx].name.c_str(), dims)) {
         throw std::runtime_error("rfdetr: setInputShape rejected for: " + bindings_[idx].name);
@@ -209,8 +242,8 @@ void TrtSession::set_input(std::string_view name, const void* host_data, std::si
            << " bytes, binding expects " << b.bytes;
         throw std::runtime_error(os.str());
     }
-    std::memcpy(host_buffers_[idx], host_data, bytes);
-    RFDETR_CUDA_CHECK(cudaMemcpyAsync(device_buffers_[idx], host_buffers_[idx], bytes,
+    std::memcpy(host_buffers_[idx].get(), host_data, bytes);
+    RFDETR_CUDA_CHECK(cudaMemcpyAsync(device_buffers_[idx].get(), host_buffers_[idx].get(), bytes,
                                        cudaMemcpyHostToDevice, stream_));
 }
 
@@ -226,7 +259,7 @@ void* TrtSession::device_buffer(std::string_view name) {
     if (idx < 0) {
         throw std::runtime_error("rfdetr: no such binding: " + std::string(name));
     }
-    return device_buffers_[idx];
+    return device_buffers_[idx].get();
 }
 
 const void* TrtSession::device_buffer(std::string_view name) const {
@@ -234,7 +267,7 @@ const void* TrtSession::device_buffer(std::string_view name) const {
     if (idx < 0) {
         throw std::runtime_error("rfdetr: no such binding: " + std::string(name));
     }
-    return device_buffers_[idx];
+    return device_buffers_[idx].get();
 }
 
 void TrtSession::get_output(std::string_view name, void* host_data, std::size_t bytes) {
@@ -252,10 +285,10 @@ void TrtSession::get_output(std::string_view name, void* host_data, std::size_t 
            << " bytes, binding produces " << b.bytes;
         throw std::runtime_error(os.str());
     }
-    RFDETR_CUDA_CHECK(cudaMemcpyAsync(host_buffers_[idx], device_buffers_[idx], bytes,
+    RFDETR_CUDA_CHECK(cudaMemcpyAsync(host_buffers_[idx].get(), device_buffers_[idx].get(), bytes,
                                        cudaMemcpyDeviceToHost, stream_));
     RFDETR_CUDA_CHECK(cudaStreamSynchronize(stream_));
-    std::memcpy(host_data, host_buffers_[idx], bytes);
+    std::memcpy(host_data, host_buffers_[idx].get(), bytes);
 }
 
 void TrtSession::get_output_f32(std::string_view name, float* host_float32,
@@ -273,17 +306,17 @@ void TrtSession::get_output_f32(std::string_view name, float* host_float32,
 
     if (b.dtype == nvinfer1::DataType::kFLOAT) {
         // Native FP32 — use the normal path.
-        RFDETR_CUDA_CHECK(cudaMemcpyAsync(host_buffers_[idx], device_buffers_[idx], b.bytes,
-                                           cudaMemcpyDeviceToHost, stream_));
+        RFDETR_CUDA_CHECK(cudaMemcpyAsync(host_buffers_[idx].get(), device_buffers_[idx].get(),
+                                           b.bytes, cudaMemcpyDeviceToHost, stream_));
         RFDETR_CUDA_CHECK(cudaStreamSynchronize(stream_));
-        std::memcpy(host_float32, host_buffers_[idx], b.bytes);
+        std::memcpy(host_float32, host_buffers_[idx].get(), b.bytes);
     } else if (b.dtype == nvinfer1::DataType::kHALF) {
         // FP16 — copy raw bytes then convert on CPU.
-        RFDETR_CUDA_CHECK(cudaMemcpyAsync(host_buffers_[idx], device_buffers_[idx], b.bytes,
-                                           cudaMemcpyDeviceToHost, stream_));
+        RFDETR_CUDA_CHECK(cudaMemcpyAsync(host_buffers_[idx].get(), device_buffers_[idx].get(),
+                                           b.bytes, cudaMemcpyDeviceToHost, stream_));
         RFDETR_CUDA_CHECK(cudaStreamSynchronize(stream_));
         // Portable IEEE 754 fp16->fp32 conversion.
-        const auto* src = static_cast<const std::uint16_t*>(host_buffers_[idx]);
+        const auto* src = static_cast<const std::uint16_t*>(host_buffers_[idx].get());
         for (std::size_t i = 0; i < element_count; ++i) {
             const std::uint16_t h = src[i];
             const std::uint32_t sign     = (h >> 15u) & 1u;
@@ -308,10 +341,10 @@ void TrtSession::get_output_f32(std::string_view name, float* host_float32,
         }
     } else if (b.dtype == nvinfer1::DataType::kINT8) {
         // INT8 output — dequantize with fixed scale 1/128.
-        RFDETR_CUDA_CHECK(cudaMemcpyAsync(host_buffers_[idx], device_buffers_[idx], b.bytes,
-                                           cudaMemcpyDeviceToHost, stream_));
+        RFDETR_CUDA_CHECK(cudaMemcpyAsync(host_buffers_[idx].get(), device_buffers_[idx].get(),
+                                           b.bytes, cudaMemcpyDeviceToHost, stream_));
         RFDETR_CUDA_CHECK(cudaStreamSynchronize(stream_));
-        const auto* src = static_cast<const std::int8_t*>(host_buffers_[idx]);
+        const auto* src = static_cast<const std::int8_t*>(host_buffers_[idx].get());
         for (std::size_t i = 0; i < element_count; ++i) {
             host_float32[i] = static_cast<float>(src[i]) * (1.0f / 128.0f);
         }
