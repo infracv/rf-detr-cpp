@@ -14,6 +14,17 @@ jobs:
       pull-requests: write
 
     steps:
-      - uses: actions/assign-action@v1
+      - uses: actions/github-script@v7
         with:
-          assignees: farukalamai
+          script: |
+            const assignees = ['farukalamai'];
+            const isIssue = !!context.payload.issue;
+            const number = isIssue
+              ? context.payload.issue.number
+              : context.payload.pull_request.number;
+            await github.rest.issues.addAssignees({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: number,
+              assignees,
+            });
