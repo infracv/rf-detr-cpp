@@ -1,0 +1,19 @@
+name: Auto Assign
+
+on:
+  issues:
+    types: [opened]
+  pull_request:
+    types: [opened]
+
+jobs:
+  assign:
+    runs-on: ubuntu-22.04
+    permissions:
+      issues: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/assign-action@v1
+        with:
+          assignees: farukalamai

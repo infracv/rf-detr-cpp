@@ -16,10 +16,11 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-# CUDA architectures: 87 = Orin (Orin NX), 101 = Thor, 120 = Blackwell (RTX 50xx).
-# Override at configure time with -DCMAKE_CUDA_ARCHITECTURES="<list>".
+# CUDA architectures: 86 = Ampere (RTX 30xx), 89 = Ada (RTX 40xx),
+#   87 = Orin, 101 = Thor, 120 = Blackwell (RTX 50xx).
+# Override at configure time: -DCMAKE_CUDA_ARCHITECTURES="86;89".
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-    set(CMAKE_CUDA_ARCHITECTURES 87 101 120)
+    set(CMAKE_CUDA_ARCHITECTURES 86 87 89 101 120)
 endif()
 
 # Build options.
@@ -57,19 +58,24 @@ add_library(rfdetr::rfdetr ALIAS rfdetr)
 
 target_sources(rfdetr
     PRIVATE
+        src/core/log.cpp
         src/core/variant.cpp
         src/core/engine_meta.cpp
         src/core/trt_session.cpp
         src/core/cuda_preprocess.cu
+        src/core/mask_decode.cu
         src/core/postprocess.cpp
         src/core/drawing.cpp
         src/tasks/detector.cpp
+        src/tasks/segmenter.cpp
 )
 
 target_include_directories(rfdetr
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 target_link_libraries(rfdetr
@@ -110,6 +116,9 @@ if(RFDETR_BUILD_APPS)
 
     add_executable(rfdetr_detect apps/rfdetr_detect.cpp)
     target_link_libraries(rfdetr_detect PRIVATE rfdetr::rfdetr)
+
+    add_executable(rfdetr_seg apps/rfdetr_seg.cpp)
+    target_link_libraries(rfdetr_seg PRIVATE rfdetr::rfdetr)
 
     add_executable(rfdetr_video apps/rfdetr_video.cpp)
     target_link_libraries(rfdetr_video PRIVATE rfdetr::rfdetr)

@@ -1,12 +1,13 @@
 #include "rfdetr/c_api.h"
 
+#include "rfdetr/core/log.hpp"
 #include "rfdetr/tasks/detector.hpp"
 #include "rfdetr/version.hpp"
 
 #include <opencv2/core.hpp>
 
+#include <atomic>
 #include <cstring>
-#include <mutex>
 #include <stdexcept>
 #include <string>
 
@@ -21,23 +22,16 @@ static void set_error(const std::string& msg) noexcept {
 }
 
 // ---------------------------------------------------------------------------
-// Log callback
+// Log callback — the C-ABI accepts a single string callback; forward it
+// through the C++ library's typed log system so TRT messages, segmenter
+// warnings, and graph-capture notes all funnel through the same handler.
 // ---------------------------------------------------------------------------
 
-static rfdetr_log_fn_t g_log_callback = nullptr;
-static std::mutex      g_log_mutex;
+static std::atomic<rfdetr_log_fn_t> g_c_log_callback{nullptr};
 
-static void log_message(const std::string& msg) noexcept {
-    rfdetr_log_fn_t cb = nullptr;
-    {
-        std::lock_guard<std::mutex> lk(g_log_mutex);
-        cb = g_log_callback;
-    }
-    if (cb) {
-        cb(msg.c_str());
-    } else {
-        std::fputs(msg.c_str(), stderr);
-        std::fputs("\n", stderr);
+static void c_log_adapter(rfdetr::LogSeverity /*sev*/, const char* msg) noexcept {
+    if (auto cb = g_c_log_callback.load(std::memory_order_acquire)) {
+        cb(msg ? msg : "");
     }
 }
 
@@ -79,6 +73,11 @@ static rfdetr_detections_t* pack_detections(const rfdetr::Detections& dets) {
 // ---------------------------------------------------------------------------
 
 static cv::Mat wrap_bgr(const uint8_t* bgr_data, int width, int height, int step) {
+    if (width <= 0 || height <= 0 || step < width * 3) {
+        throw std::invalid_argument(
+            "rfdetr: wrap_bgr: invalid image dimensions (width=" + std::to_string(width) +
+            " height=" + std::to_string(height) + " step=" + std::to_string(step) + ")");
+    }
     return cv::Mat(height, width, CV_8UC3,
                    const_cast<uint8_t*>(bgr_data),
                    static_cast<std::size_t>(step));
@@ -95,8 +94,8 @@ const char* rfdetr_last_error(void) {
 }
 
 void rfdetr_set_log_callback(rfdetr_log_fn_t callback) {
-    std::lock_guard<std::mutex> lk(g_log_mutex);
-    g_log_callback = callback;
+    g_c_log_callback.store(callback, std::memory_order_release);
+    rfdetr::set_log_callback(callback ? &c_log_adapter : nullptr);
 }
 
 const char* rfdetr_version(void) {

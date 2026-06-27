@@ -42,20 +42,23 @@ class RFDetrDetector {
 
     // Detect objects in a single BGR (or RGB if meta says so) cv::Mat.
     // `threshold` overrides the option set at construction; pass < 0 to use default.
-    Detections detect(const cv::Mat& image, float threshold = -1.0f);
+    [[nodiscard]] Detections detect(const cv::Mat& image, float threshold = -1.0f);
 
     // Batch detect: images must all have the same dimensions. Returns a flat
     // vector of Detections per image (results[i] = detections for images[i]).
     // Requires an engine built with max_batch >= images.size().
-    std::vector<Detections> detect_batch(const std::vector<cv::Mat>& images,
-                                         float threshold = -1.0f);
+    [[nodiscard]] std::vector<Detections> detect_batch(const std::vector<cv::Mat>& images,
+                                                        float threshold = -1.0f);
 
     // Accessors for inspection / benchmarking.
-    const std::string& variant()    const noexcept;
-    int                input_h()    const noexcept;
-    int                input_w()    const noexcept;
-    int                num_queries() const noexcept;
-    int                num_classes() const noexcept;
+    [[nodiscard]] const std::string& variant()    const noexcept;
+    [[nodiscard]] int                input_h()    const noexcept;
+    [[nodiscard]] int                input_w()    const noexcept;
+    [[nodiscard]] int                num_queries() const noexcept;
+    [[nodiscard]] int                num_classes() const noexcept;
+    // True if CUDA Graph was successfully captured at construction.
+    // False means enqueueV3 is used every call (still correct, slightly higher latency).
+    [[nodiscard]] bool               cuda_graph_active() const noexcept;
 
     // Timings from the last detect() call, in milliseconds.
     struct Timings {
@@ -64,7 +67,7 @@ class RFDetrDetector {
         double postprocess_ms{0};
         double total_ms{0};
     };
-    const Timings& last_timings() const noexcept;
+    [[nodiscard]] const Timings& last_timings() const noexcept;
 
    private:
     struct Impl;
