@@ -1,0 +1,49 @@
+name: 🚀 Feature Request
+title: "[Feature]: "
+description: Suggest a new feature or improvement for RF-DETR C++
+labels: [enhancement]
+body:
+  - type: checkboxes
+    attributes:
+      label: Search before asking
+      description: Please search [issues](https://github.com/infracv/rf-detr-cpp/issues) first to avoid duplicates.
+      options:
+        - label: I have searched existing issues and found no similar feature request.
+          required: true
+
+  - type: textarea
+    attributes:
+      label: Feature Description
+      description: What would you like added or improved, and why?
+      placeholder: |
+        **What:** Describe the feature.
+
+        **Why:** What problem does it solve? Who benefits?
+
+        **How (optional):** Any ideas on implementation or API design?
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Example Usage
+      description: Optional — show how you'd use this feature
+      placeholder: |
+        ```cpp
+        // Example C++ usage
+
+        ```
+
+        or
+
+        ```sh
+        # Example CLI usage
+        ```
+    validations:
+      required: false
+
+  - type: checkboxes
+    attributes:
+      label: Are you willing to submit a PR?
+      options:
+        - label: Yes, I'd like to help by submitting a PR!

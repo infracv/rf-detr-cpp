@@ -60,18 +60,17 @@ Detections decode_detections(const float* dets, const float* labels, int img_w, 
     const float H = static_cast<float>(img_h);
 
     for (int i = 0; i < K; ++i) {
-        const Candidate& k = cand[i];
-        // Skip background class.
-        if (p.bg_class_index >= 0 && k.raw_class == p.bg_class_index) continue;
+        const Candidate& cnd = cand[i];
+        if (p.bg_class_index >= 0 && cnd.raw_class == p.bg_class_index) continue;
 
-        const float score = sigmoid(k.score);
+        const float score = sigmoid(cnd.score);
         if (score < p.threshold) {
             // Sorted desc, so anything beyond also fails — but background hits are
             // sparse near the top, so don't break: they'd otherwise mask later hits.
             continue;
         }
 
-        const float* db = dets + k.query_idx * 4;
+        const float* db = dets + cnd.query_idx * 4;
         const float cx = db[0];
         const float cy = db[1];
         const float w  = db[2];
@@ -87,7 +86,7 @@ Detections decode_detections(const float* dets, const float* labels, int img_w, 
         d.box.x2   = std::max(0.0f, std::min(W, d.box.x2));
         d.box.y2   = std::max(0.0f, std::min(H, d.box.y2));
         d.score    = score;
-        d.class_id = (p.bg_class_index >= 0) ? (k.raw_class - 1) : k.raw_class;
+        d.class_id = (p.bg_class_index >= 0) ? (cnd.raw_class - 1) : cnd.raw_class;
         if (d.box.width() > 0.0f && d.box.height() > 0.0f) {
             out.push_back(std::move(d));
         }

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: ❓ Ask a Question
+    url: https://github.com/infracv/rf-detr-cpp/discussions/new?category=q-a
+    about: Ask questions about building, converting models, or running inference
+  - name: 💬 GitHub Discussions
+    url: https://github.com/infracv/rf-detr-cpp/discussions
+    about: General discussion, ideas, and community help

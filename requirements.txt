@@ -1,18 +1,4 @@
 # Python dependencies for the ONNX export script.
-# Only required to run trt-files/scripts/export_onnx.py (PyTorch -> ONNX).
-# The C++ runtime (rfdetr_build, rfdetr_inspect, rfdetr_smoke, the library)
-# does NOT need any of this.
-#
-# Install (one-time):
-#   uv venv --python 3.12 .venv && source .venv/bin/activate
-#   uv pip install -r requirements.txt
-
-# Upstream RF-DETR — model classes + .export(format="onnx") API.
-# Pulls torch, torchvision, transformers, timm, supervision as transitive deps.
 rfdetr>=1.7.0
-
-# ONNX serialization (used by export_onnx.py).
 onnx>=1.15
-
-# Graph simplifier — RF-DETR's exporter calls onnxsim internally.
 onnxsim>=0.4.36

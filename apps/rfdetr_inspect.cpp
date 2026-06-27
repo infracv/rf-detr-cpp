@@ -136,10 +136,6 @@ int main(int argc, char** argv) {
         std::printf("  input_hxw    = %dx%d\n", meta.input_h, meta.input_w);
         std::printf("  num_queries  = %d\n", meta.num_queries);
         std::printf("  num_classes  = %d\n", meta.num_classes);
-        std::printf("  has_masks    = %s\n", meta.has_masks ? "true" : "false");
-        if (meta.has_masks) {
-            std::printf("  mask_hxw     = %dx%d\n", meta.mask_h, meta.mask_w);
-        }
         std::printf("  color_order  = %s\n", meta.color_order.c_str());
         std::printf("  precision    = %s\n", meta.precision.c_str());
         std::printf("  mean         = [%.4f, %.4f, %.4f]\n", meta.mean[0], meta.mean[1],
@@ -156,10 +152,10 @@ int main(int argc, char** argv) {
                         meta.input_w);
         }
 
-        const int expected_outputs = meta.has_masks ? 3 : 2;
+        const int expected_outputs = 2;
         if (output_count != expected_outputs) {
-            std::printf("  WARNING: engine has %d outputs, meta implies %d (has_masks=%s)\n",
-                        output_count, expected_outputs, meta.has_masks ? "true" : "false");
+            std::printf("  WARNING: engine has %d outputs, expected %d\n",
+                        output_count, expected_outputs);
         }
         if (input_count != 1) {
             std::printf("  WARNING: engine has %d inputs, expected 1\n", input_count);

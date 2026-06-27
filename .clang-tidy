@@ -18,3 +18,4 @@ WarningsAsErrors: ''
 HeaderFilterRegex: '.*include/rfdetr/.*'
 FormatStyle: file
 ...
+

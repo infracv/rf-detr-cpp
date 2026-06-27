@@ -17,6 +17,7 @@
 //                [--input-name input] [--min-batch 1 --opt-batch 1 --max-batch 1]
 //                [--verbose]
 
+#include "cli_helpers.hpp"
 #include "rfdetr/core/engine_meta.hpp"
 #include "rfdetr/core/trt_logger.hpp"
 #include "rfdetr/version.hpp"
@@ -116,22 +117,6 @@ void usage(const char* argv0) {
         argv0, rfdetr::version());
 }
 
-bool starts_with(std::string_view s, std::string_view p) {
-    return s.size() >= p.size() && s.compare(0, p.size(), p) == 0;
-}
-
-// Accepts both "--flag=value" and "--flag value".
-const char* next_value(int argc, char** argv, int& i, std::string_view flag) {
-    std::string_view a = argv[i];
-    if (a.size() > flag.size() + 1 && a[flag.size()] == '=') {
-        return argv[i] + flag.size() + 1;
-    }
-    if (i + 1 >= argc) {
-        throw std::runtime_error("missing value for " + std::string(flag));
-    }
-    return argv[++i];
-}
-
 Args parse_args(int argc, char** argv) {
     Args a;
     for (int i = 1; i < argc; ++i) {
@@ -143,11 +128,11 @@ Args parse_args(int argc, char** argv) {
         else if (starts_with(arg, "--meta"))         a.meta_in = next_value(argc, argv, i, "--meta");
         else if (starts_with(arg, "--precision"))    a.precision = next_value(argc, argv, i, "--precision");
         else if (starts_with(arg, "--calib"))        a.calib     = next_value(argc, argv, i, "--calib");
-        else if (starts_with(arg, "--workspace-mib"))a.workspace_mib = std::atoi(next_value(argc, argv, i, "--workspace-mib"));
+        else if (starts_with(arg, "--workspace-mib"))a.workspace_mib = parse_int(next_value(argc, argv, i, "--workspace-mib"), "--workspace-mib");
         else if (starts_with(arg, "--input-name"))   a.input_name = next_value(argc, argv, i, "--input-name");
-        else if (starts_with(arg, "--min-batch"))    a.min_batch = std::atoi(next_value(argc, argv, i, "--min-batch"));
-        else if (starts_with(arg, "--opt-batch"))    a.opt_batch = std::atoi(next_value(argc, argv, i, "--opt-batch"));
-        else if (starts_with(arg, "--max-batch"))    a.max_batch = std::atoi(next_value(argc, argv, i, "--max-batch"));
+        else if (starts_with(arg, "--min-batch"))    a.min_batch = parse_int(next_value(argc, argv, i, "--min-batch"), "--min-batch");
+        else if (starts_with(arg, "--opt-batch"))    a.opt_batch = parse_int(next_value(argc, argv, i, "--opt-batch"), "--opt-batch");
+        else if (starts_with(arg, "--max-batch"))    a.max_batch = parse_int(next_value(argc, argv, i, "--max-batch"), "--max-batch");
         else if (arg == "--cuda-graph")              a.cuda_graph_compat = true;
         else if (arg == "--verbose")                 a.verbose = true;
         else {
@@ -220,6 +205,34 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "error: onnx not found: %s\n", args.onnx.c_str());
         return 1;
     }
+
+    // TRT 11+ FP16: the kFP16 builder flag was removed. Auto-convert ONNX weights
+    // to FP16 via convert_fp16.py, then feed the converted ONNX to the TRT parser.
+    // The user still just runs:  rfdetr_build --onnx model.onnx --precision fp16
+#if NV_TENSORRT_MAJOR >= 11
+    std::filesystem::path fp16_tmp_onnx;
+    if (args.precision == "fp16") {
+        const std::filesystem::path script{"trt-files/scripts/convert_fp16.py"};
+        if (!std::filesystem::is_regular_file(script)) {
+            std::fprintf(stderr,
+                "error: trt-files/scripts/convert_fp16.py not found.\n"
+                "       Run rfdetr_build from the project root directory.\n");
+            return 1;
+        }
+        fp16_tmp_onnx = args.onnx.parent_path() /
+                        (args.onnx.stem().string() + "-fp16-tmp.onnx");
+        std::printf("[rfdetr_build] TRT 11+: converting ONNX weights to FP16...\n");
+        const std::string cmd = "python \"" + script.string() + "\""
+                              + " --onnx \"" + args.onnx.string() + "\""
+                              + " --out \""  + fp16_tmp_onnx.string() + "\"";
+        if (std::system(cmd.c_str()) != 0 ||
+                !std::filesystem::is_regular_file(fp16_tmp_onnx)) {
+            std::fprintf(stderr, "error: FP16 ONNX conversion failed\n");
+            return 1;
+        }
+        args.onnx = fp16_tmp_onnx;
+    }
+#endif
 
     rfdetr::TrtLogger logger{args.verbose ? nvinfer1::ILogger::Severity::kVERBOSE
                                           : nvinfer1::ILogger::Severity::kWARNING};
@@ -306,9 +319,21 @@ int main(int argc, char** argv) {
         config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE,
                                    static_cast<std::size_t>(args.workspace_mib) << 20);
 
+        // TRT < 11: set kFP16 builder flag on the original FP32 ONNX.
+        // TRT 11+: ONNX weights were already converted to FP16 above; no flag needed.
+#if NV_TENSORRT_MAJOR < 11
+        if (args.precision == "fp16") {
+            if (!builder->platformHasFastFp16()) {
+                std::fprintf(stderr,
+                    "warning: GPU does not report fast FP16; building FP16 anyway.\n");
+            }
+            config->setFlag(nvinfer1::BuilderFlag::kFP16);
+            std::printf("[rfdetr_build] FP16 mode enabled\n");
+        }
+#endif
+
         // INT8 calibration — implicit quantization (TRT < 11 only).
-        // TRT 11+ removed IInt8EntropyCalibrator2 and the kINT8 builder flag in favour of
-        // QDQ-based explicit quantization.  On TRT 11+, use build_engine.py + trtexec for INT8.
+        // TRT 11+ uses QDQ-based explicit quantization via convert_int8.py.
 #if NV_TENSORRT_MAJOR < 11
         std::unique_ptr<CacheOnlyCalibrator> calibrator;
         if (args.precision == "int8") {
@@ -324,12 +349,13 @@ int main(int argc, char** argv) {
         if (args.precision == "int8") {
             std::fprintf(stderr,
                 "error: --precision int8 is not supported by rfdetr_build on TensorRT 11+.\n"
-                "       TRT 11 uses QDQ-based explicit quantization.\n"
-                "       Use build_engine.py + trtexec for INT8:\n"
-                "         python trt-files/scripts/build_engine.py \\\n"
-                "             --onnx %s --precision int8 \\\n"
-                "             --int8-calib %s\n",
-                args.onnx.c_str(), args.calib.c_str());
+                "       TRT 11 uses QDQ-based explicit quantization. Insert QDQ nodes first:\n"
+                "         python trt-files/scripts/convert_int8.py \\\n"
+                "             --onnx %s --images val2017/ \\\n"
+                "             --out  trt-files/onnx/rf-detr-nano-int8.onnx\n"
+                "         ./build/rfdetr_build \\\n"
+                "             --onnx trt-files/onnx/rf-detr-nano-int8.onnx --precision fp32\n",
+                args.onnx.c_str());
             return 1;
         }
 #endif
@@ -396,20 +422,18 @@ int main(int argc, char** argv) {
             if (in_dims.d[2] > 0) meta.input_h = in_dims.d[2];
             if (in_dims.d[3] > 0) meta.input_w = in_dims.d[3];
         }
-        meta.precision          = args.precision;
+        // If the ONNX was pre-converted to FP16 or INT8-QDQ but the builder flag
+        // is fp32 (TRT 11 strongly-typed path), preserve the sidecar precision so
+        // the runtime and benchmark tools report the correct precision.
+        if (!(args.precision == "fp32" && have_meta &&
+              (meta.precision == "fp16" || meta.precision == "int8"))) {
+            meta.precision = args.precision;
+        }
         meta.dynamic_batch      = need_profile;
         meta.cuda_graph_compat  = args.cuda_graph_compat;
         meta.min_batch     = args.min_batch;
         meta.opt_batch     = args.opt_batch;
         meta.max_batch     = args.max_batch;
-        // has_masks: trust sidecar; if no sidecar, infer from output count (3 outputs => seg).
-        if (!have_meta) {
-            meta.has_masks = (network->getNbOutputs() >= 3);
-            if (meta.has_masks) {
-                meta.mask_h = meta.input_h / 4;
-                meta.mask_w = meta.input_w / 4;
-            }
-        }
 
         meta.to_json_file(args.meta_out);
         std::printf("[rfdetr_build] wrote %s\n", args.meta_out.c_str());
@@ -418,5 +442,12 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "error: %s\n", e.what());
         return 1;
     }
+
+#if NV_TENSORRT_MAJOR >= 11
+    if (!fp16_tmp_onnx.empty() && std::filesystem::is_regular_file(fp16_tmp_onnx)) {
+        std::filesystem::remove(fp16_tmp_onnx);
+    }
+#endif
+
     return 0;
 }

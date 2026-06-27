@@ -1,7 +1,6 @@
 #include "rfdetr/c_api.h"
 
 #include "rfdetr/tasks/detector.hpp"
-#include "rfdetr/tasks/segmenter.hpp"
 #include "rfdetr/version.hpp"
 
 #include <opencv2/core.hpp>
@@ -51,11 +50,6 @@ struct rfdetr_detector_s {
     explicit rfdetr_detector_s(rfdetr::RFDetrDetector&& d) : obj(std::move(d)) {}
 };
 
-struct rfdetr_segmenter_s {
-    rfdetr::RFDetrSegmenter obj;
-    explicit rfdetr_segmenter_s(rfdetr::RFDetrSegmenter&& s) : obj(std::move(s)) {}
-};
-
 // ---------------------------------------------------------------------------
 // Helper: convert rfdetr::Detections -> heap-allocated rfdetr_detections_t
 // ---------------------------------------------------------------------------
@@ -76,18 +70,6 @@ static rfdetr_detections_t* pack_detections(const rfdetr::Detections& dets) {
         od.box.y2   = d.box.y2;
         od.class_id = d.class_id;
         od.score    = d.score;
-
-        if (!d.mask.empty()) {
-            const int bytes = d.mask.rows * d.mask.cols;
-            od.mask_data   = new uint8_t[static_cast<std::size_t>(bytes)];
-            od.mask_width  = d.mask.cols;
-            od.mask_height = d.mask.rows;
-            std::memcpy(od.mask_data, d.mask.data, static_cast<std::size_t>(bytes));
-        } else {
-            od.mask_data   = nullptr;
-            od.mask_width  = 0;
-            od.mask_height = 0;
-        }
     }
     return out;
 }
@@ -98,7 +80,7 @@ static rfdetr_detections_t* pack_detections(const rfdetr::Detections& dets) {
 
 static cv::Mat wrap_bgr(const uint8_t* bgr_data, int width, int height, int step) {
     return cv::Mat(height, width, CV_8UC3,
-                   const_cast<void*>(static_cast<const void*>(bgr_data)),
+                   const_cast<uint8_t*>(bgr_data),
                    static_cast<std::size_t>(step));
 }
 
@@ -134,7 +116,6 @@ rfdetr_detector_t* rfdetr_detector_create(const char* engine_path, const char* m
         return new rfdetr_detector_s(std::move(det));
     } catch (const std::exception& e) {
         set_error(e.what());
-        log_message(std::string("rfdetr_detector_create failed: ") + e.what());
         return nullptr;
     }
 }
@@ -177,78 +158,11 @@ rfdetr_detections_t* rfdetr_detector_detect(rfdetr_detector_t* det,
     }
 }
 
-// ----- Segmenter -----
-
-rfdetr_segmenter_t* rfdetr_segmenter_create(const char* engine_path, const char* meta_path) {
-    t_last_error.clear();
-    if (!engine_path) { set_error("rfdetr_segmenter_create: engine_path is NULL"); return nullptr; }
-    try {
-        rfdetr::RFDetrSegmenter seg =
-            meta_path
-                ? rfdetr::RFDetrSegmenter(engine_path, meta_path)
-                : rfdetr::RFDetrSegmenter(engine_path);
-        return new rfdetr_segmenter_s(std::move(seg));
-    } catch (const std::exception& e) {
-        set_error(e.what());
-        log_message(std::string("rfdetr_segmenter_create failed: ") + e.what());
-        return nullptr;
-    }
-}
-
-void rfdetr_segmenter_destroy(rfdetr_segmenter_t* seg) {
-    delete seg;
-}
-
-const char* rfdetr_segmenter_variant(const rfdetr_segmenter_t* seg) {
-    if (!seg) return "";
-    return seg->obj.variant().c_str();
-}
-int rfdetr_segmenter_input_width(const rfdetr_segmenter_t* seg) {
-    return seg ? seg->obj.input_w() : 0;
-}
-int rfdetr_segmenter_input_height(const rfdetr_segmenter_t* seg) {
-    return seg ? seg->obj.input_h() : 0;
-}
-int rfdetr_segmenter_num_queries(const rfdetr_segmenter_t* seg) {
-    return seg ? seg->obj.num_queries() : 0;
-}
-int rfdetr_segmenter_num_classes(const rfdetr_segmenter_t* seg) {
-    return seg ? seg->obj.num_classes() : 0;
-}
-int rfdetr_segmenter_mask_width(const rfdetr_segmenter_t* seg) {
-    return seg ? seg->obj.mask_w() : 0;
-}
-int rfdetr_segmenter_mask_height(const rfdetr_segmenter_t* seg) {
-    return seg ? seg->obj.mask_h() : 0;
-}
-
-rfdetr_detections_t* rfdetr_segmenter_segment(rfdetr_segmenter_t* seg,
-                                               const uint8_t* bgr_data,
-                                               int width, int height, int step,
-                                               float threshold) {
-    t_last_error.clear();
-    if (!seg)      { set_error("rfdetr_segmenter_segment: seg is NULL");      return nullptr; }
-    if (!bgr_data) { set_error("rfdetr_segmenter_segment: bgr_data is NULL"); return nullptr; }
-    try {
-        cv::Mat img = wrap_bgr(bgr_data, width, height, step);
-        auto dets   = seg->obj.segment(img, threshold);
-        return pack_detections(dets);
-    } catch (const std::exception& e) {
-        set_error(e.what());
-        return nullptr;
-    }
-}
-
 // ----- Memory management -----
 
 void rfdetr_detections_free(rfdetr_detections_t* dets) {
     if (!dets) return;
-    if (dets->detections) {
-        for (int i = 0; i < dets->count; ++i) {
-            delete[] dets->detections[i].mask_data;
-        }
-        delete[] dets->detections;
-    }
+    delete[] dets->detections;
     delete dets;
 }
 

@@ -51,7 +51,6 @@ extern "C" {
  * Opaque handle types
  * ---------------------------------------------------------------------- */
 typedef struct rfdetr_detector_s  rfdetr_detector_t;   /* detection engine  */
-typedef struct rfdetr_segmenter_s rfdetr_segmenter_t;  /* segmentation engine */
 
 /* -------------------------------------------------------------------------
  * Data types
@@ -67,20 +66,11 @@ typedef struct rfdetr_box_s {
  *
  * class_id : foreground dense index (0 = first foreground class, e.g. "person").
  *            Add 1 to get the COCO-91 sparse id.
- *
- * mask_data : binary mask, CV_8UC1 flattened row-major (0 or 255).
- *             Non-NULL only when produced by rfdetr_segmenter_segment().
- *             Width = mask_width, Height = mask_height (same as input image).
- *             Memory is owned by the parent rfdetr_detections_t; freed by
- *             rfdetr_detections_free().  Do NOT free mask_data directly.
  */
 typedef struct rfdetr_detection_s {
     rfdetr_box_t box;
     int          class_id;
     float        score;
-    uint8_t*     mask_data;    /* NULL unless from segmenter */
-    int          mask_width;
-    int          mask_height;
 } rfdetr_detection_t;
 
 /*
@@ -160,44 +150,12 @@ RFDETR_API rfdetr_detections_t* rfdetr_detector_detect(rfdetr_detector_t* det,
                                                         float threshold);
 
 /* -------------------------------------------------------------------------
- * Segmenter — rfdetr_segmenter_t
- * ---------------------------------------------------------------------- */
-
-/*
- * Create a segmenter from a seg-* TRT engine.
- * Arguments identical to rfdetr_detector_create.
- */
-RFDETR_API rfdetr_segmenter_t* rfdetr_segmenter_create(const char* engine_path,
-                                                        const char* meta_path);
-
-RFDETR_API void rfdetr_segmenter_destroy(rfdetr_segmenter_t* seg);
-
-RFDETR_API const char* rfdetr_segmenter_variant(const rfdetr_segmenter_t* seg);
-RFDETR_API int         rfdetr_segmenter_input_width(const rfdetr_segmenter_t* seg);
-RFDETR_API int         rfdetr_segmenter_input_height(const rfdetr_segmenter_t* seg);
-RFDETR_API int         rfdetr_segmenter_num_queries(const rfdetr_segmenter_t* seg);
-RFDETR_API int         rfdetr_segmenter_num_classes(const rfdetr_segmenter_t* seg);
-RFDETR_API int         rfdetr_segmenter_mask_width(const rfdetr_segmenter_t* seg);
-RFDETR_API int         rfdetr_segmenter_mask_height(const rfdetr_segmenter_t* seg);
-
-/*
- * Run segmentation on a single image.
- * Each returned detection has mask_data filled (non-NULL, same size as the input image).
- * Arguments and return value identical to rfdetr_detector_detect.
- */
-RFDETR_API rfdetr_detections_t* rfdetr_segmenter_segment(rfdetr_segmenter_t* seg,
-                                                          const uint8_t* bgr_data,
-                                                          int width, int height, int step,
-                                                          float threshold);
-
-/* -------------------------------------------------------------------------
  * Result memory management
  * ---------------------------------------------------------------------- */
 
 /*
- * Free a detection result set returned by rfdetr_detector_detect() or
- * rfdetr_segmenter_segment().  Safe to call with NULL.
- * Also frees any mask_data pointers inside the detections.
+ * Free a detection result set returned by rfdetr_detector_detect().
+ * Safe to call with NULL.
  */
 RFDETR_API void rfdetr_detections_free(rfdetr_detections_t* dets);
 

@@ -12,18 +12,14 @@ namespace rfdetr {
 
 struct DetectorOptions {
     float threshold{0.5f};
-    // Step 6: set to true to enable CUDA Graph capture (latency -15..30%)
+    // Enable CUDA Graph capture for lower dispatch latency (~0.1–0.3 ms).
     bool use_cuda_graph{false};
-    // Step 6: number of warm-up iterations used during graph capture (1 is enough)
+    // Warm-up iterations before graph capture (1 is sufficient).
     int  graph_warmup_iters{1};
 };
 
 // Public single-class detector API.  Hides all TRT/CUDA headers from users.
 // Wraps TrtSession + ImagePreprocessor + decode_detections in a PIMPL.
-//
-// Usage:
-//   rfdetr::RFDetrDetector det("rf-detr-nano-fp32.engine");
-//   auto results = det.detect(image, 0.5f);
 //
 // Thread safety: not thread-safe.  Use one instance per thread.
 class RFDetrDetector {
