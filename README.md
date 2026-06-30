@@ -10,7 +10,6 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/infracv/rf-detr-cpp/stargazers"><img src="https://img.shields.io/github/stars/infracv/rf-detr-cpp?style=flat-square&logo=github&color=f5c211" alt="Stars"/></a>
   <img src="https://img.shields.io/badge/TensorRT-%E2%89%A5%2010.0-76B900?logo=nvidia&logoColor=white" alt="TensorRT"/>
   <img src="https://img.shields.io/badge/CUDA-%E2%89%A5%2012.0-76B900?logo=nvidia&logoColor=white" alt="CUDA"/>
   <img src="https://img.shields.io/badge/C%2B%2B-17-blue.svg?logo=cplusplus&logoColor=white" alt="C++17"/>
