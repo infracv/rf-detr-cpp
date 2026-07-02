@@ -241,12 +241,12 @@ lib = ctypes.CDLL("librfdetr_c.so")
 
 NVIDIA RTX 5070 Ti, 500 iters, 50-iter warm-up, Batch 1.
 
-| Task | Variant | Precision | FPS | Avg Latency | P50 | P99 | GPU Memory |
-|:-----|:-------:|:---------:|:---:|:-----------:|:---:|:---:|:----------:|
-| Detection | `nano` | **FP32** | 406 | 2.462 ms | 2.444 ms | 2.778 ms | 859 MB |
-| Detection | `nano` | **FP16** | 514 | 1.944 ms | 1.911 ms | 2.508 ms | 836 MB |
-| Segmentation | `seg-nano` | **FP32** | 112 | 8.906 ms | 8.817 ms | 10.243 ms | 892 MB |
-| Segmentation | `seg-nano` | **FP16** | 157 | 6.364 ms | 6.314 ms | 7.211 ms | 886 MB |
+| Task | Precision | FPS | Avg Latency | P50 | P99 | GPU Memory |
+|:-----|:---------:|:---:|:-----------:|:---:|:---:|:----------:|
+| Detection (`nano`) | **FP32** | 406 | 2.462 ms | 2.444 ms | 2.778 ms | 859 MB |
+| Detection (`nano`) | **FP16** | 514 | 1.944 ms | 1.911 ms | 2.508 ms | 836 MB |
+| Segmentation (`seg-nano`) | **FP32** | 112 | 8.906 ms | 8.817 ms | 10.243 ms | 892 MB |
+| Segmentation (`seg-nano`) | **FP16** | 157 | 6.364 ms | 6.314 ms | 7.211 ms | 886 MB |
 
 > Numbers include the full pipeline: preprocessing, inference, and postprocessing. Segmentation mask decoding runs entirely on the GPU via a dedicated CUDA kernel.
 
