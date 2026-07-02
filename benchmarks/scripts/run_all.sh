@@ -10,7 +10,8 @@
 #       [--bench      ./build/rfdetr_bench] \
 #       [--warmup     50] \
 #       [--iters      500] \
-#       [--batch      1]
+#       [--batch      1] \
+#       [--csv-name   benchmark_results.csv]
 #
 # Finds all *.engine files under --engine-dir, runs rfdetr_bench for each,
 # writes one JSON per engine to --out-dir/<device>_<stem>.json.
@@ -28,6 +29,7 @@ OUT_DIR="benchmarks/results"
 BENCH="./build/rfdetr_bench"
 WARMUP=50
 ITERS=500
+CSV_NAME="benchmark_results.csv"
 
 # ── Parse args ────────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -39,6 +41,7 @@ while [[ $# -gt 0 ]]; do
         --bench)      BENCH="$2";      shift 2 ;;
         --warmup)     WARMUP="$2";     shift 2 ;;
         --iters)      ITERS="$2";      shift 2 ;;
+        --csv-name)   CSV_NAME="$2";   shift 2 ;;
         -h|--help)
             sed -n '2,/^$/p' "$0" | grep '^#' | sed 's/^# \?//'
             exit 0
@@ -87,6 +90,7 @@ for ENGINE in "${ENGINES[@]}"; do
         --warmup     "$WARMUP" \
         --iters      "$ITERS" \
         --output-dir "$OUT_DIR" \
+        --csv-name   "$CSV_NAME" \
         --json; then
         echo "    -> $OUT_DIR"
         PASS=$((PASS + 1))

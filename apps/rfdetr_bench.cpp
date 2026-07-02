@@ -168,6 +168,7 @@ struct BenchmarkConfig {
     int         camera_seconds{30};
     float       threshold{0.5f};
     std::string output_dir{"benchmarks/results"};
+    std::string csv_name{"benchmark_results.csv"};
     bool        json_output{false};
     bool        verbose{true};
 };
@@ -488,6 +489,7 @@ static void usage(const char* prog) {
         "  --iters N          Measurement iterations (default: 500)\n"
         "  --threshold F      Detection threshold (default: 0.5)\n"
         "  --output-dir PATH  Results directory (default: benchmarks/results)\n"
+        "  --csv-name NAME    CSV filename in output-dir (default: benchmark_results.csv)\n"
         "  --json             Write per-run JSON file\n"
         "  --verbose / --quiet\n",
         prog, prog, prog, prog);
@@ -559,6 +561,7 @@ int main(int argc, char** argv) {
         else if (starts_with(a, "--iters"))      cfg.iters      = parse_int(next_value(argc, argv, i, "--iters"), "--iters");
         else if (starts_with(a, "--threshold"))  cfg.threshold  = parse_float(next_value(argc, argv, i, "--threshold"), "--threshold");
         else if (starts_with(a, "--output-dir")) cfg.output_dir = next_value(argc, argv, i, "--output-dir");
+        else if (starts_with(a, "--csv-name"))   cfg.csv_name   = next_value(argc, argv, i, "--csv-name");
         else { std::fprintf(stderr, "unknown flag: %s\n", std::string(a).c_str()); return 1; }
     }
 
@@ -606,7 +609,7 @@ int main(int argc, char** argv) {
 
     // CSV always
     std::string stem = (have_meta ? meta.variant : "model") + "_" + (have_meta ? meta.precision : "fp32");
-    export_csv(cfg.output_dir + "/benchmark_results.csv", cfg, m, meta, have_meta, mode);
+    export_csv(cfg.output_dir + "/" + cfg.csv_name, cfg, m, meta, have_meta, mode);
 
     // JSON if requested
     if (cfg.json_output) {

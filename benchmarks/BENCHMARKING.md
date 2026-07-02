@@ -2,43 +2,113 @@
 
 How to reproduce the published numbers and run your own benchmarks. This guide only covers FP32 and FP16 — see [INT8_QUANTIZATION.md](../trt-files/INT8_QUANTIZATION.md) if you need INT8.
 
+> **Running this yourself?** Always pass `--csv-name your_benchmark.csv` to `rfdetr_bench` (or `--csv-name` to `run_all.sh`). Without it, results append to the committed `benchmark_results.csv`, mixing your numbers with the published ones.
+
+---
+
+# Setup (Common to All Devices)
+
+Do this once per device, whether it's a desktop GPU or a Jetson.
+
+## 1. Install Dependencies
+
+```sh
+# Python deps for ONNX export (uv recommended)
+uv venv --python 3.12 .venv && source .venv/bin/activate
+uv pip install -r requirements.txt
+```
+
+C++ build dependencies (CUDA, TensorRT, OpenCV, CMake) are covered in the [main README](../README.md#prerequisites).
+
+## 2. Build the Library with Benchmarks Enabled
+
+```sh
+cmake -B build -S . -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CUDA_ARCHITECTURES=<arch> \
+    -DRFDETR_BUILD_BENCHMARKS=ON
+cmake --build build -j$(nproc)
+```
+
+Replace `<arch>` with your device's compute capability (see the [GPU arch table](../README.md#build-from-source) — desktop RTX cards, or `87`/`101` for Jetson, covered below).
+
+## 3. Export ONNX (Detection + Segmentation)
+
+```sh
+python trt-files/scripts/export_onnx.py --variant nano     --out-dir trt-files/onnx
+python trt-files/scripts/export_onnx.py --variant seg-nano --out-dir trt-files/onnx
+```
+
+This produces the ONNX files for both tasks. Do this once per model variant, it does not need to be repeated per device.
+
+## 4. Build All 4 Engines (FP32 + FP16, Detection + Segmentation)
+
+Engines are GPU/driver/TRT-version specific, so this step must be run **on the target device**, not copied over from another machine.
+
+```sh
+# Detection — FP32
+./build/rfdetr_build --onnx trt-files/onnx/rf-detr-nano.onnx --precision fp32
+
+# Detection — FP16
+./build/rfdetr_build --onnx trt-files/onnx/rf-detr-nano.onnx --precision fp16
+
+# Segmentation — FP32
+./build/rfdetr_build --onnx trt-files/onnx/rf-detr-seg-nano.onnx --precision fp32
+
+# Segmentation — FP16
+./build/rfdetr_build --onnx trt-files/onnx/rf-detr-seg-nano.onnx --precision fp16
+```
+
+This gives you:
+
+```
+trt-files/onnx/rf-detr-nano-fp32.engine
+trt-files/onnx/rf-detr-nano-fp16.engine
+trt-files/onnx/rf-detr-seg-nano-fp32.engine
+trt-files/onnx/rf-detr-seg-nano-fp16.engine
+```
+
+Verify they're all there before benchmarking:
+
+```sh
+ls trt-files/onnx/*.engine
+```
+
 ---
 
 # NVIDIA GPU (Desktop / Server)
 
-## Prerequisites
+## Pin the GPU Clock
 
-Build with `-DRFDETR_BUILD_BENCHMARKS=ON` (see the [main README](../README.md#build-from-source) for the full build command and GPU arch table).
-
-You also need at least one built engine. See `trt-files/scripts/` for ONNX export and `rfdetr_build` for engine conversion.
-
-## Single Engine, Single Run
+For reproducible numbers, lock the clock before benchmarking:
 
 ```sh
-# Quick sanity check (10 warm-up, 100 iters)
-./build/rfdetr_bench quick trt-files/onnx/rf-detr-nano-fp16.engine asset/test_img.jpg
+sudo nvidia-smi -pm 1
+sudo nvidia-smi --lock-gpu-clocks=<base>,<max>
+```
 
-# Full run with JSON output
+## Run All 4 Benchmarks
+
+```sh
+./build/rfdetr_bench image trt-files/onnx/rf-detr-nano-fp32.engine asset/test_img.jpg \
+    --device rtx-4090 --warmup 50 --iters 500 --json \
+    --output-dir benchmarks/results --csv-name your_benchmark.csv
+
 ./build/rfdetr_bench image trt-files/onnx/rf-detr-nano-fp16.engine asset/test_img.jpg \
-    --device rtx-4090 \
-    --warmup 50 \
-    --iters  500 \
-    --json \
-    --output-dir benchmarks/results
-```
+    --device rtx-4090 --warmup 50 --iters 500 --json \
+    --output-dir benchmarks/results --csv-name your_benchmark.csv
 
-The `--device` label is written into the JSON report and used for filenames — use a short slug like `rtx-4090` or `a100-sxm`.
+./build/rfdetr_bench image trt-files/onnx/rf-detr-seg-nano-fp32.engine asset/test_img.jpg \
+    --device rtx-4090 --warmup 50 --iters 500 --json \
+    --output-dir benchmarks/results --csv-name your_benchmark.csv
 
-For segmentation engines, task type is detected automatically from the engine sidecar (`.engine.json`):
-
-```sh
 ./build/rfdetr_bench image trt-files/onnx/rf-detr-seg-nano-fp16.engine asset/test_img.jpg \
-    --device rtx-4090 --warmup 50 --iters 500 --json --output-dir benchmarks/results
+    --device rtx-4090 --warmup 50 --iters 500 --json \
+    --output-dir benchmarks/results --csv-name your_benchmark.csv
 ```
 
-## Sweep All Engines
+Task type (detection vs segmentation) is auto-detected from the engine sidecar (`.engine.json`). Use a short `--device` slug like `rtx-4090` or `a100-sxm` — it's written into filenames and JSON reports. `--csv-name` keeps your results in their own file instead of appending to the committed `benchmark_results.csv`.
 
-Use `run_all.sh` to benchmark every `.engine` file in a directory in one shot:
+## Sweep All Engines in One Shot
 
 ```sh
 ./benchmarks/scripts/run_all.sh \
@@ -47,23 +117,11 @@ Use `run_all.sh` to benchmark every `.engine` file in a directory in one shot:
     --device     rtx-4090 \
     --out-dir    benchmarks/results \
     --warmup     50 \
-    --iters      500
+    --iters      500 \
+    --csv-name   your_benchmark.csv
 ```
 
-The script writes one JSON report per engine to `--out-dir`, then calls `compare_devices.py` automatically to print a summary table.
-
-## Compare Results Across Devices
-
-Collect JSON reports from multiple machines into the same directory, then run:
-
-```sh
-python3 benchmarks/scripts/compare_devices.py benchmarks/results/
-
-# CSV output
-python3 benchmarks/scripts/compare_devices.py benchmarks/results/ --csv > table.csv
-```
-
-The script groups rows by device, variant, precision, and task and renders a Markdown table with FPS, mean latency, P50, P99, and GPU memory.
+This benchmarks every `.engine` file under `--engine-dir` and calls `compare_devices.py` automatically at the end.
 
 ## Video Throughput
 
@@ -77,11 +135,6 @@ The script groups rows by device, variant, precision, and task and renders a Mar
 
 ## Tips
 
-- **Pin the GPU clock** before benchmarking for reproducible numbers:
-  ```sh
-  sudo nvidia-smi -pm 1
-  sudo nvidia-smi --lock-gpu-clocks=<base>,<max>
-  ```
 - Run with `compute-sanitizer` after any CUDA change to catch memory errors before benchmarking:
   ```sh
   compute-sanitizer --tool memcheck ./build/rfdetr_bench quick <engine> <image>
@@ -93,7 +146,7 @@ The script groups rows by device, variant, precision, and task and renders a Mar
 
 # NVIDIA Jetson (Orin / Thor)
 
-Everything in the section above applies on Jetson too. This section only covers what's different.
+Everything in the setup section above applies here too — same ONNX export, same 4 engines, built on-device. This section covers what's different on Jetson.
 
 ## Compute Capability
 
@@ -101,8 +154,6 @@ Everything in the section above applies on Jetson too. This section only covers 
 |:-------|:--------------------------:|
 | Jetson Orin (Orin NX, Orin Nano, AGX Orin) | `87` |
 | Jetson AGX Thor | `101` |
-
-Build with the correct value explicitly, do not rely on the multi-arch default:
 
 ```sh
 # Orin NX 16GB
@@ -114,20 +165,18 @@ cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=101
 cmake --build build -j$(nproc)
 ```
 
-## JetPack / TensorRT Version
-
-Check what ships on your device before building engines — engine files are TRT-version-specific and won't transfer between JetPack releases.
+## Check JetPack / TensorRT Version
 
 ```sh
 dpkg -l | grep -i tensorrt
 cat /etc/nv_tegra_release
 ```
 
-Export ONNX and build the `.engine` file directly on the Jetson (or on a build host running the identical JetPack/TRT version). An engine built on a desktop RTX GPU will not load on Jetson.
+Engines are TRT-version-specific and won't transfer across JetPack releases, or from a desktop RTX GPU. Build them on the Jetson itself (step 4 in Setup, above).
 
-## Lock Clocks Before Benchmarking
+## Set Max Performance Mode and Lock Clocks
 
-Jetson power modes and dynamic clock scaling introduce significant run-to-run variance if left on defaults. Lock clocks to the maximum for reproducible numbers:
+Jetson power modes and dynamic clock scaling introduce significant run-to-run variance if left on defaults. Do this once per boot, before benchmarking:
 
 ```sh
 # Set max performance power mode (MAXN / MAXN SUPER, name varies by JetPack release)
@@ -140,39 +189,31 @@ sudo jetson_clocks
 sudo jetson_clocks --show
 ```
 
-Run this before every benchmark session — a reboot or power-mode change resets it.
+No reboot is required — both commands take effect immediately. You do need to re-run them after a reboot or a power-mode change, since those reset the clocks back to default.
 
-## Unified Memory Caveat
-
-Jetson uses a unified CPU/GPU memory pool (no dedicated VRAM). `cudaMemGetInfo`, which `rfdetr_bench` uses for the "GPU Memory" column, reports free/total *system* memory, not a GPU-only allocation. Numbers are still useful for relative comparison across precisions, but are not directly comparable to discrete-GPU results in the main benchmark table.
-
-For a more accurate picture of memory pressure on Jetson, cross-check with:
+## Run All 4 Benchmarks
 
 ```sh
-tegrastats
+./build/rfdetr_bench image trt-files/onnx/rf-detr-nano-fp32.engine asset/test_img.jpg \
+    --device jetson-orin-nx-16gb --warmup 50 --iters 500 --json \
+    --output-dir benchmarks/results --csv-name your_benchmark.csv
+
+./build/rfdetr_bench image trt-files/onnx/rf-detr-nano-fp16.engine asset/test_img.jpg \
+    --device jetson-orin-nx-16gb --warmup 50 --iters 500 --json \
+    --output-dir benchmarks/results --csv-name your_benchmark.csv
+
+./build/rfdetr_bench image trt-files/onnx/rf-detr-seg-nano-fp32.engine asset/test_img.jpg \
+    --device jetson-orin-nx-16gb --warmup 50 --iters 500 --json \
+    --output-dir benchmarks/results --csv-name your_benchmark.csv
+
+./build/rfdetr_bench image trt-files/onnx/rf-detr-seg-nano-fp16.engine asset/test_img.jpg \
+    --device jetson-orin-nx-16gb --warmup 50 --iters 500 --json \
+    --output-dir benchmarks/results --csv-name your_benchmark.csv
 ```
 
-Run it in a second terminal while `rfdetr_bench` is active.
+Use `--device jetson-agx-thor` (or your specific module name) on Thor. `--csv-name` keeps your results in their own file — without it, all 4 runs would append to the committed `benchmark_results.csv`.
 
-## Running the Benchmark
-
-Same commands as desktop, just label the device correctly so results don't get mixed up in `compare_devices.py`:
-
-```sh
-# Orin NX 16GB
-./build/rfdetr_bench image trt-files/onnx/rf-detr-nano-fp16.engine asset/test_img.jpg \
-    --device jetson-orin-nx-16gb \
-    --warmup 50 --iters 500 --json \
-    --output-dir benchmarks/results
-
-# AGX Thor
-./build/rfdetr_bench image trt-files/onnx/rf-detr-nano-fp16.engine asset/test_img.jpg \
-    --device jetson-agx-thor \
-    --warmup 50 --iters 500 --json \
-    --output-dir benchmarks/results
-```
-
-For a full sweep across all engines on the device:
+Or sweep all engines at once:
 
 ```sh
 ./benchmarks/scripts/run_all.sh \
@@ -180,25 +221,47 @@ For a full sweep across all engines on the device:
     --image      asset/test_img.jpg \
     --device     jetson-orin-nx-16gb \
     --out-dir    benchmarks/results \
-    --warmup     50 --iters 500
+    --warmup     50 --iters 500 \
+    --csv-name   your_benchmark.csv
 ```
+
+## Unified Memory Caveat
+
+Jetson uses a unified CPU/GPU memory pool (no dedicated VRAM). `cudaMemGetInfo`, which `rfdetr_bench` uses for the "GPU Memory" column, reports free/total *system* memory, not a GPU-only allocation. Numbers are still useful for relative comparison across precisions, but are not directly comparable to discrete-GPU results in the main benchmark table.
+
+For a more accurate picture of memory pressure, cross-check with `tegrastats` in a second terminal while `rfdetr_bench` is running.
 
 ## Thermal Throttling
 
-Jetson modules can throttle under sustained load, especially in fanless or passively-cooled carrier boards. If you see FPS drop over a long `--iters` run:
+Jetson modules can throttle under sustained load, especially in fanless or passively-cooled carrier boards. If FPS drops over a long `--iters` run:
 
-- Check `tegrastats` for `thermal` or throttle warnings.
+- Check `tegrastats` for thermal/throttle warnings.
 - Ensure the fan/heatsink is attached and `nvpmodel` allows the fan to run at full speed.
-- Prefer shorter, repeated runs over one very long run if throttling is unavoidable in your enclosure, and note the ambient temperature in your results.
+- Prefer shorter, repeated runs over one very long run if throttling is unavoidable, and note the ambient temperature in your results.
 
 ## Reporting Results
 
-When sharing Jetson numbers (e.g. in an issue or PR), include:
+When sharing Jetson numbers, include:
 
 - Exact module (Orin NX 16GB vs 8GB, Thor variant)
 - JetPack version and TensorRT version
 - Power mode used (`nvpmodel -m <N>`) and whether `jetson_clocks` was applied
 - Carrier board / cooling setup if throttling is a concern
+
+---
+
+## Compare Results Across Devices
+
+Collect JSON reports from multiple machines into the same directory, then run:
+
+```sh
+python3 benchmarks/scripts/compare_devices.py benchmarks/results/
+
+# CSV output
+python3 benchmarks/scripts/compare_devices.py benchmarks/results/ --csv > table.csv
+```
+
+The script groups rows by device, variant, precision, and task and renders a Markdown table with FPS, mean latency, P50, P99, and GPU memory.
 
 ---
 
