@@ -250,6 +250,22 @@ NVIDIA RTX 5070 Ti, 500 iters, 50-iter warm-up, Batch 1.
 
 > Numbers include the full pipeline: preprocessing, inference, and postprocessing. Segmentation mask decoding runs entirely on the GPU via a dedicated CUDA kernel.
 
+<details>
+<summary>Jetson Orin NX 16GB — TensorRT 10.3.0 / CUDA 12.6</summary>
+
+500 iters, 50-iter warm-up, Batch 1.
+
+| Task | Precision | FPS | Avg Latency | P50 | P99 |
+|:-----|:---------:|:---:|:-----------:|:---:|:---:|
+| Detection (`nano`) | **FP16** | 120 | 8.302 ms | 7.766 ms | 12.829 ms |
+| Detection (`nano`) | **FP32** | 50 | 19.984 ms | 18.858 ms | 33.003 ms |
+| Segmentation (`seg-nano`) | **FP16** | 55 | 18.093 ms | 17.008 ms | 23.871 ms |
+| Segmentation (`seg-nano`) | **FP32** | 24 | 42.292 ms | 42.047 ms | 45.436 ms |
+
+> GPU Memory column is omitted — Jetson uses unified CPU/GPU memory, so `cudaMemGetInfo` reports system memory rather than dedicated VRAM and the delta reads as zero. See the [Benchmarking Guide](./benchmarks/BENCHMARKING.md#unified-memory-caveat) for details.
+
+</details>
+
 See [benchmarks/BENCHMARKING.md](./benchmarks/BENCHMARKING.md) to reproduce these numbers or run your own benchmarks on any GPU.
 
 ---
