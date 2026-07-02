@@ -368,7 +368,7 @@ static void export_csv(const std::string& path, const BenchmarkConfig& cfg,
              "gpu_latency_avg,gpu_latency_p50,gpu_latency_p99,"
              "fps,throughput,"
              "cpu_usage,gpu_usage,gpu_memory_mb,"
-             "avg_detections,AP50,mAP5095,"
+             "avg_detections,"
              "trt_version,cuda_version\n";
     }
 
@@ -395,7 +395,6 @@ static void export_csv(const std::string& path, const BenchmarkConfig& cfg,
       << std::setprecision(1)
       << m.cpu_usage_avg << "," << m.gpu_usage_avg << "," << m.gpu_memory_mb << ","
       << m.avg_detections << ","
-      << "N/A,N/A,"
       << trt_ver() << "," << cuda_ver() << "\n";
     std::printf("  CSV appended -> %s\n", path.c_str());
 }

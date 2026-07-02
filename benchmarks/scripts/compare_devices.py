@@ -17,8 +17,6 @@ JSON schema expected (from rfdetr_bench):
         "latency_ms":   {"mean": float, "p50": float, "p90": float, "p99": float, ...},
         "gpu_ms":       {"mean": float, ...},
         "throughput_fps": float,
-        "map_50_95":    float | null,
-        "map_50":       float | null,
     }
 """
 
@@ -63,7 +61,6 @@ def build_table(results: list[dict], csv_mode: bool = False) -> str:
         "Device", "Variant", "Task", "Prec.", "Batch",
         "Lat mean (ms)", "Lat p50", "Lat p90", "Lat p99",
         "GPU mean (ms)", "Throughput (fps)",
-        "mAP@50:95", "mAP@50",
         "TRT",
     ]
 
@@ -86,8 +83,6 @@ def build_table(results: list[dict], csv_mode: bool = False) -> str:
             fmt_float(lat.get("p99")),
             fmt_float(gpu.get("mean")),
             fmt_float(r.get("throughput_fps")),
-            fmt_float(r.get("map_50_95"), decimals=3),
-            fmt_float(r.get("map_50"), decimals=3),
             r.get("trt_version", "?"),
         ])
 

@@ -243,12 +243,10 @@ NVIDIA RTX 5070 Ti, 500 iters, 50-iter warm-up, Batch 1.
 
 | Task | Variant | Precision | FPS | Avg Latency | P50 | P99 | GPU Memory |
 |:-----|:-------:|:---------:|:---:|:-----------:|:---:|:---:|:----------:|
-| Detection | `nano` | **FP32** | 401 | 2.496 ms | 2.479 ms | 2.838 ms | 831 MB |
-| Detection | `nano` | **FP16** | 500 | 2.001 ms | 1.972 ms | 2.703 ms | 768 MB |
-| Detection | `nano` | **INT8** | 482 | 2.073 ms | 2.045 ms | 2.786 ms | 684 MB |
-| Segmentation | `seg-nano` | **FP32** | 147 | 6.776 ms | 6.743 ms | 7.344 ms | 789 MB |
-| Segmentation | `seg-nano` | **FP16** | 166 | 6.014 ms | 5.979 ms | 6.648 ms | 735 MB |
-| Segmentation | `seg-nano` | **INT8** | 126 | 7.895 ms | 7.856 ms | 8.531 ms | 687 MB |
+| Detection | `nano` | **FP32** | 406 | 2.462 ms | 2.444 ms | 2.778 ms | 859 MB |
+| Detection | `nano` | **FP16** | 514 | 1.944 ms | 1.911 ms | 2.508 ms | 836 MB |
+| Segmentation | `seg-nano` | **FP32** | 112 | 8.906 ms | 8.817 ms | 10.243 ms | 892 MB |
+| Segmentation | `seg-nano` | **FP16** | 157 | 6.364 ms | 6.314 ms | 7.211 ms | 886 MB |
 
 > Numbers include the full pipeline: preprocessing, inference, and postprocessing. Segmentation mask decoding runs entirely on the GPU via a dedicated CUDA kernel.
 
