@@ -10,6 +10,7 @@
 #include "rfdetr/core/cuda_check.hpp"
 #include "rfdetr/core/engine_meta.hpp"
 #include "rfdetr/tasks/detector.hpp"
+#include "rfdetr/tasks/segmenter.hpp"
 
 #include <NvInferVersion.h>
 #include <cuda_runtime_api.h>
@@ -160,12 +161,14 @@ struct LatencyStats {
 struct BenchmarkConfig {
     std::string engine;
     std::string device{"unknown"};
+    std::string task{"detection"};   // "detection" or "segmentation"
     int         warmup{50};
     int         iters{500};
     int         max_video_frames{2000};
     int         camera_seconds{30};
     float       threshold{0.5f};
     std::string output_dir{"benchmarks/results"};
+    std::string csv_name{"benchmark_results.csv"};
     bool        json_output{false};
     bool        verbose{true};
 };
@@ -281,7 +284,7 @@ static void print_metrics(const BenchmarkConfig& cfg, const BenchmarkMetrics& m,
     std::cout << "  Engine:      " << c(cfg.engine, GREEN) << "\n";
     std::cout << "  Variant:     " << (have_meta ? meta.variant : "?") << "\n";
     std::cout << "  Precision:   " << (have_meta ? meta.precision : "?") << "\n";
-    std::cout << "  Task:        " << "detection" << "\n";
+    std::cout << "  Task:        " << cfg.task << "\n";
     std::cout << "  Input type:  " << input_type << "\n";
     std::cout << "  Device:      " << c(cfg.device, GREEN) << "\n";
     std::cout << "  TRT:         " << trt_ver() << "  CUDA: " << cuda_ver()
@@ -331,7 +334,7 @@ static void export_json(const std::string& path, const BenchmarkConfig& cfg,
     j["device"]         = cfg.device;
     j["variant"]        = have_meta ? meta.variant   : "unknown";
     j["precision"]      = have_meta ? meta.precision : "unknown";
-    j["task"]           = "detection";
+    j["task"]           = cfg.task;
     j["input_type"]     = input_type;
     j["batch"]          = 1;
     j["trt_version"]    = trt_ver();
@@ -366,7 +369,7 @@ static void export_csv(const std::string& path, const BenchmarkConfig& cfg,
              "gpu_latency_avg,gpu_latency_p50,gpu_latency_p99,"
              "fps,throughput,"
              "cpu_usage,gpu_usage,gpu_memory_mb,"
-             "avg_detections,AP50,mAP5095,"
+             "avg_detections,"
              "trt_version,cuda_version\n";
     }
 
@@ -376,7 +379,7 @@ static void export_csv(const std::string& path, const BenchmarkConfig& cfg,
 
     f << std::time(nullptr) << ","
       << (have_meta ? meta.variant   : "unknown") << ","
-      << "detection" << ","
+      << cfg.task << ","
       << input_type << ","
       << cfg.device << ","
       << (have_meta ? meta.precision : "unknown") << ","
@@ -393,7 +396,6 @@ static void export_csv(const std::string& path, const BenchmarkConfig& cfg,
       << std::setprecision(1)
       << m.cpu_usage_avg << "," << m.gpu_usage_avg << "," << m.gpu_memory_mb << ","
       << m.avg_detections << ","
-      << "N/A,N/A,"
       << trt_ver() << "," << cuda_ver() << "\n";
     std::printf("  CSV appended -> %s\n", path.c_str());
 }
@@ -402,14 +404,33 @@ static int run_det(rfdetr::RFDetrDetector& det, const cv::Mat& f, float thr) {
     return static_cast<int>(det.detect(f, thr).size());
 }
 
+static int run_seg(rfdetr::RFDetrSegmenter& seg, const cv::Mat& f, float thr) {
+    return static_cast<int>(seg.segment(f, thr).size());
+}
+
+// Dispatch helper: builds either a detector or segmenter and returns a
+// closure invoking the right run_* per frame. Keeps the bench_* code paths
+// identical between tasks.
+template <typename RunFn>
+BenchmarkMetrics run_with_engine(const BenchmarkConfig& cfg,
+                                  const std::vector<cv::Mat>& frames,
+                                  RunFn&& configure) {
+    if (cfg.task == "segmentation") {
+        rfdetr::RFDetrSegmenter seg(cfg.engine);
+        return configure([&](const cv::Mat& f) { return run_seg(seg, f, cfg.threshold); });
+    }
+    rfdetr::RFDetrDetector det(cfg.engine);
+    return configure([&](const cv::Mat& f) { return run_det(det, f, cfg.threshold); });
+}
+
 static BenchmarkMetrics bench_image(const BenchmarkConfig& cfg, const cv::Mat& frame) {
     const int pool = std::max(1, std::min(8, cfg.iters));
     std::vector<cv::Mat> frames(static_cast<std::size_t>(pool), frame);
 
     auto t0 = std::chrono::steady_clock::now();
-    BenchmarkMetrics m;
-    rfdetr::RFDetrDetector det(cfg.engine);
-    m = run_loop([&](const cv::Mat& f) { return run_det(det, f, cfg.threshold); }, frames, cfg);
+    BenchmarkMetrics m = run_with_engine(cfg, frames, [&](auto infer) {
+        return run_loop(infer, frames, cfg);
+    });
     m.load_ms = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - t0).count() - m.warmup_ms - m.latency.avg * cfg.iters;
     return m;
@@ -427,9 +448,9 @@ static BenchmarkMetrics bench_video(const BenchmarkConfig& cfg, const std::strin
     if (frames.empty()) throw std::runtime_error("no frames in video");
     std::printf("  Loaded %zu frames from video\n", frames.size());
 
-    rfdetr::RFDetrDetector det(cfg.engine);
-    return run_loop([&](const cv::Mat& fr) { return run_det(det, fr, cfg.threshold); },
-                    frames, cfg);
+    return run_with_engine(cfg, frames, [&](auto infer) {
+        return run_loop(infer, frames, cfg);
+    });
 }
 
 static BenchmarkMetrics bench_camera(const BenchmarkConfig& cfg, int cam_id) {
@@ -448,9 +469,9 @@ static BenchmarkMetrics bench_camera(const BenchmarkConfig& cfg, int cam_id) {
 
     if (frames.empty()) throw std::runtime_error("no frames from camera");
 
-    rfdetr::RFDetrDetector det(cfg.engine);
-    return run_loop([&](const cv::Mat& fr) { return run_det(det, fr, cfg.threshold); },
-                    frames, cfg);
+    return run_with_engine(cfg, frames, [&](auto infer) {
+        return run_loop(infer, frames, cfg);
+    });
 }
 
 static void usage(const char* prog) {
@@ -462,11 +483,13 @@ static void usage(const char* prog) {
         "  %s video  <engine> <video>  [options]\n"
         "  %s camera <engine> <cam_id> [options]\n\n"
         "Options:\n"
+        "  --task TYPE        detection (default) | segmentation\n"
         "  --device TAG       Label for CSV/JSON (default: unknown)\n"
         "  --warmup N         Warm-up iterations (default: 50)\n"
         "  --iters N          Measurement iterations (default: 500)\n"
         "  --threshold F      Detection threshold (default: 0.5)\n"
         "  --output-dir PATH  Results directory (default: benchmarks/results)\n"
+        "  --csv-name NAME    CSV filename in output-dir (default: benchmark_results.csv)\n"
         "  --json             Write per-run JSON file\n"
         "  --verbose / --quiet\n",
         prog, prog, prog, prog);
@@ -491,7 +514,8 @@ int main(int argc, char** argv) {
         // parse any extra flags
         for (int i = 4; i < argc; ++i) {
             std::string_view a = argv[i];
-            if (starts_with(a, "--device"))  cfg.device = next_value(argc, argv, i, "--device");
+            if (starts_with(a, "--device"))    cfg.device = next_value(argc, argv, i, "--device");
+            else if (starts_with(a, "--task")) cfg.task   = next_value(argc, argv, i, "--task");
         }
         std::string img_path = argv[3];
         cv::Mat frame = cv::imread(img_path);
@@ -500,6 +524,10 @@ int main(int argc, char** argv) {
         rfdetr::EngineMeta meta; bool have_meta = false;
         std::string mp = cfg.engine + ".json";
         if (fs::is_regular_file(mp)) { meta = rfdetr::EngineMeta::from_json_file(mp); have_meta = true; }
+
+        if (cfg.task == "detection" && have_meta && meta.has_masks) {
+            cfg.task = "segmentation";
+        }
 
         std::printf("\n%s\n  Engine: %s\n  Quick mode: %d warm-up, %d iters\n\n",
                     colors::c("RF-DETR Quick Benchmark", colors::BOLD).c_str(),
@@ -528,10 +556,12 @@ int main(int argc, char** argv) {
         else if (a == "--quiet")                 cfg.verbose = false;
         else if (a == "--json")                  cfg.json_output = true;
         else if (starts_with(a, "--device"))     cfg.device     = next_value(argc, argv, i, "--device");
+        else if (starts_with(a, "--task"))       cfg.task       = next_value(argc, argv, i, "--task");
         else if (starts_with(a, "--warmup"))     cfg.warmup     = parse_int(next_value(argc, argv, i, "--warmup"), "--warmup");
         else if (starts_with(a, "--iters"))      cfg.iters      = parse_int(next_value(argc, argv, i, "--iters"), "--iters");
         else if (starts_with(a, "--threshold"))  cfg.threshold  = parse_float(next_value(argc, argv, i, "--threshold"), "--threshold");
         else if (starts_with(a, "--output-dir")) cfg.output_dir = next_value(argc, argv, i, "--output-dir");
+        else if (starts_with(a, "--csv-name"))   cfg.csv_name   = next_value(argc, argv, i, "--csv-name");
         else { std::fprintf(stderr, "unknown flag: %s\n", std::string(a).c_str()); return 1; }
     }
 
@@ -539,11 +569,22 @@ int main(int argc, char** argv) {
     std::string mp = cfg.engine + ".json";
     if (fs::is_regular_file(mp)) { meta = rfdetr::EngineMeta::from_json_file(mp); have_meta = true; }
 
+    // Auto-detect task from the engine sidecar if --task wasn't explicitly set.
+    if (cfg.task == "detection" && have_meta && meta.has_masks) {
+        cfg.task = "segmentation";
+    }
+    if (cfg.task != "detection" && cfg.task != "segmentation") {
+        std::fprintf(stderr, "error: --task must be 'detection' or 'segmentation', got '%s'\n",
+                     cfg.task.c_str());
+        return 1;
+    }
+
     std::printf("\n%s\n", colors::c(std::string(72, '='), colors::CYAN).c_str());
     std::printf("  %s\n", colors::c("RF-DETR BENCHMARK", colors::BOLD).c_str());
     std::printf("%s\n\n", colors::c(std::string(72, '='), colors::CYAN).c_str());
     std::printf("  Engine:    %s\n", cfg.engine.c_str());
     std::printf("  Mode:      %s\n", mode.c_str());
+    std::printf("  Task:      %s\n", cfg.task.c_str());
     std::printf("  Input:     %s\n", input.c_str());
     std::printf("  Device:    %s\n", cfg.device.c_str());
     std::printf("  Warmup:    %d   Iters: %d\n\n", cfg.warmup, cfg.iters);
@@ -568,7 +609,7 @@ int main(int argc, char** argv) {
 
     // CSV always
     std::string stem = (have_meta ? meta.variant : "model") + "_" + (have_meta ? meta.precision : "fp32");
-    export_csv(cfg.output_dir + "/benchmark_results.csv", cfg, m, meta, have_meta, mode);
+    export_csv(cfg.output_dir + "/" + cfg.csv_name, cfg, m, meta, have_meta, mode);
 
     // JSON if requested
     if (cfg.json_output) {

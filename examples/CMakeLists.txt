@@ -17,7 +17,7 @@ if(NOT TARGET rfdetr::rfdetr)
     add_subdirectory(.. rfdetr_parent)
 endif()
 
-foreach(example image_det video_det camera_det)
+foreach(example image_det video_det camera_det image_seg video_seg)
     add_executable(example_${example} example_${example}.cpp)
     target_link_libraries(example_${example} PRIVATE rfdetr::rfdetr)
     target_include_directories(example_${example} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

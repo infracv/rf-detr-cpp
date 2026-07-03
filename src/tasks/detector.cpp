@@ -1,11 +1,12 @@
 #include "rfdetr/tasks/detector.hpp"
 
 #include "rfdetr/core/coco_classes.hpp"
-#include "rfdetr/core/cuda_check.hpp"
-#include "rfdetr/core/cuda_preprocess.cuh"
 #include "rfdetr/core/engine_meta.hpp"
+#include "rfdetr/core/log.hpp"
 #include "rfdetr/core/postprocess.hpp"
-#include "rfdetr/core/trt_session.hpp"
+#include "../internal/cuda_check.hpp"
+#include "../internal/cuda_preprocess.cuh"
+#include "../internal/trt_session.hpp"
 
 #include <NvInferRuntime.h>
 #include <cuda_runtime_api.h>
@@ -96,11 +97,10 @@ struct RFDetrDetector::Impl {
         // Attempt CUDA Graph capture if requested.
         if (opts.use_cuda_graph) {
             if (!meta.cuda_graph_compat) {
-                std::fprintf(stderr,
-                    "rfdetr: warning: use_cuda_graph=true but engine was not built with "
-                    "--cuda-graph (kCUDA_GRAPH_COMPATIBLE). Rebuild with:\n"
-                    "  rfdetr_build --onnx <onnx> --cuda-graph\n"
-                    "Disabling CUDA Graph for this session.\n");
+                log_message(LogSeverity::kWarning,
+                    "use_cuda_graph=true but engine was not built with --cuda-graph "
+                    "(kCUDA_GRAPH_COMPATIBLE). Rebuild with `rfdetr_build --onnx <onnx> "
+                    "--cuda-graph`. Disabling CUDA Graph for this session.");
             } else {
                 capture_graph_();
             }
@@ -151,10 +151,11 @@ struct RFDetrDetector::Impl {
 
         if (ok && graph && cudaGraphInstantiate(&graph_exec, graph, 0) == cudaSuccess) {
             graph_captured = true;
-            std::fprintf(stderr, "rfdetr: CUDA Graph captured successfully\n");
+            log_message(LogSeverity::kInfo, "CUDA Graph captured successfully");
         } else {
-            std::fprintf(stderr, "rfdetr: CUDA Graph capture failed "
-                                 "(engine has dynamic internal shapes) — using enqueueV3\n");
+            log_message(LogSeverity::kWarning,
+                "CUDA Graph capture failed (engine has dynamic internal shapes) — "
+                "using enqueueV3");
             if (graph) { cudaGraphDestroy(graph); graph = nullptr; }
         }
     }
@@ -220,23 +221,24 @@ struct RFDetrDetector::Impl {
 
         float* d_input = static_cast<float*>(session.device_buffer("input"));
 
-        // Preprocess (H2D + CUDA kernel, on session stream).
+        // Preprocess (H2D + CUDA kernel) queued on the session stream — no host
+        // sync here. infer()/cudaGraphLaunch enqueue on the same stream and TRT
+        // sees the prior work in order, so async pipelining is preserved.
+        // The host-side timing below collapses preprocess+infer into infer_ms;
+        // this is the right trade for ~0.1–0.3 ms saved per call.
         const auto t0 = Clock::now();
         preprocessor->process(image, d_input, session.stream());
-        RFDETR_CUDA_CHECK(cudaStreamSynchronize(session.stream()));
-        const auto t1 = Clock::now();
 
-        // Infer.
         if (graph_captured) {
-            // H2D was done above (outside graph), now launch graph (infer + D2H).
-            RFDETR_CUDA_CHECK(
-                cudaGraphLaunch(graph_exec, session.stream()));
+            // H2D was queued above (outside graph), now launch graph (infer + D2H).
+            RFDETR_CUDA_CHECK(cudaGraphLaunch(graph_exec, session.stream()));
             RFDETR_CUDA_CHECK(cudaStreamSynchronize(session.stream()));
         } else {
             session.infer();
             session.get_output_f32(b_dets->name,   h_dets.data(),   h_dets.size());
             session.get_output_f32(b_labels->name, h_labels.data(), h_labels.size());
         }
+        const auto t1 = t0;  // preprocess merged into infer_ms
         const auto t2 = Clock::now();
 
         // Decode.
@@ -283,11 +285,12 @@ Detections RFDetrDetector::detect(const cv::Mat& image, float threshold) {
     return impl_->run(image, threshold);
 }
 
-const std::string& RFDetrDetector::variant()     const noexcept { return impl_->meta.variant; }
-int                RFDetrDetector::input_h()      const noexcept { return impl_->meta.input_h; }
-int                RFDetrDetector::input_w()      const noexcept { return impl_->meta.input_w; }
-int                RFDetrDetector::num_queries()  const noexcept { return impl_->N; }
-int                RFDetrDetector::num_classes()  const noexcept { return impl_->meta.num_classes; }
+const std::string& RFDetrDetector::variant()          const noexcept { return impl_->meta.variant; }
+int                RFDetrDetector::input_h()           const noexcept { return impl_->meta.input_h; }
+int                RFDetrDetector::input_w()           const noexcept { return impl_->meta.input_w; }
+int                RFDetrDetector::num_queries()       const noexcept { return impl_->N; }
+int                RFDetrDetector::num_classes()       const noexcept { return impl_->meta.num_classes; }
+bool               RFDetrDetector::cuda_graph_active() const noexcept { return impl_->graph_captured; }
 
 const RFDetrDetector::Timings& RFDetrDetector::last_timings() const noexcept {
     return impl_->timings;

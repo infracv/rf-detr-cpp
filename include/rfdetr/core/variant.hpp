@@ -13,6 +13,13 @@ enum class Variant {
     Medium,
     Base,
     Large,
+    // Instance segmentation (Apache-2.0)
+    SegNano,
+    SegSmall,
+    SegMedium,
+    SegLarge,
+    SegXLarge,
+    Seg2XLarge,
 };
 
 struct VariantMeta {

@@ -49,6 +49,6 @@ Annotated results are written to `out/` in the working directory.
 
 ## Notes
 
-- Engine files must be built first with `rfdetr_build`. See the [main README](../README.md#-model-conversion) for conversion instructions.
+- Engine files must be built first with `rfdetr_build`. See the [main README](../README.md#model-conversion) for conversion instructions.
 - TensorRT engines are GPU-architecture specific — rebuild on each target device.
 - Camera example requires a display (X11 or Wayland). For headless use, remove the `cv::imshow` call and keep the `writer`.
