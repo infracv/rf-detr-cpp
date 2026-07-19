@@ -87,12 +87,17 @@ def convert_to_fp16(model: onnx.ModelProto,
             if out.type.tensor_type.elem_type == TensorProto.FLOAT:
                 out.type.tensor_type.elem_type = TensorProto.FLOAT16
 
-    # 4. Convert FP32 Constant node tensors → FP16.
-    #    These are scalar/small constants embedded in node attributes (not initializers).
+    # 4. Convert FP32 tensor-valued node attributes → FP16.
+    #    Constant carries a full tensor; ConstantOfShape carries the fill value,
+    #    and its dtype decides the output dtype. Missing ConstantOfShape leaves a
+    #    Float tensor feeding Half arithmetic, which TRT rejects outright
+    #    ("ElementWiseOperation PROD must have same input types"). Static-batch
+    #    exports never hit it because the subgraph constant-folds away; with a
+    #    dynamic batch axis it survives to the parser.
     const_converted = 0
     output_names_set = {t.name for t in graph.output}
     for node in graph.node:
-        if node.op_type != "Constant":
+        if node.op_type not in ("Constant", "ConstantOfShape"):
             continue
         # Skip if this constant feeds a graph output directly.
         if any(o in output_names_set for o in node.output):
@@ -103,7 +108,7 @@ def convert_to_fp16(model: onnx.ModelProto,
                 new_t = numpy_helper.from_array(arr)
                 attr.t.CopyFrom(new_t)
                 const_converted += 1
-    print(f"  Constant(FLOAT) nodes converted : {const_converted}")
+    print(f"  Constant/ConstantOfShape(FLOAT) : {const_converted}")
 
     # 5. Patch Cast(to=FLOAT) → Cast(to=FLOAT16) for internal casts.
     #    These are attention-internal casts that must match the new dtype.

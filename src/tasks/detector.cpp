@@ -219,6 +219,15 @@ struct RFDetrDetector::Impl {
     Detections run(const cv::Mat& image, float threshold) {
         using Clock = std::chrono::steady_clock;
 
+        // A dynamic-batch engine resolves no shapes until one is set, so the
+        // input binding has no device buffer yet — and a prior detect_batch()
+        // may have left the profile at B>1. set_input_shape early-returns when
+        // the shape is already correct, so the steady-state cost is a compare.
+        if (meta.dynamic_batch) {
+            const int R = meta.input_h;
+            session.set_input_shape("input", nvinfer1::Dims4{1, 3, R, R});
+        }
+
         float* d_input = static_cast<float*>(session.device_buffer("input"));
 
         // Preprocess (H2D + CUDA kernel) queued on the session stream — no host
@@ -235,8 +244,12 @@ struct RFDetrDetector::Impl {
             RFDETR_CUDA_CHECK(cudaStreamSynchronize(session.stream()));
         } else {
             session.infer();
-            session.get_output_f32(b_dets->name,   h_dets.data(),   h_dets.size());
-            session.get_output_f32(b_labels->name, h_labels.data(), h_labels.size());
+            // Explicit batch-1 counts: detect_batch() may have grown h_*, and
+            // get_output_f32 requires an exact element count.
+            session.get_output_f32(b_dets->name,   h_dets.data(),
+                                   static_cast<std::size_t>(N) * 4);
+            session.get_output_f32(b_labels->name, h_labels.data(),
+                                   static_cast<std::size_t>(N) * C);
         }
         const auto t1 = t0;  // preprocess merged into infer_ms
         const auto t2 = Clock::now();

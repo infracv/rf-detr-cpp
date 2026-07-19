@@ -101,10 +101,14 @@ void launch_square_resize_normalize(cudaStream_t stream, const std::uint8_t* d_s
 }
 
 ImagePreprocessor::ImagePreprocessor(int dst_R, bool src_is_bgr)
-    : R_(dst_R), src_is_bgr_(src_is_bgr) {}
+    : R_(dst_R), src_is_bgr_(src_is_bgr) {
+    RFDETR_CUDA_CHECK(cudaEventCreateWithFlags(&staging_done_, cudaEventDisableTiming));
+}
 
 // DevPtr/HostPtr destructors handle cudaFree/cudaFreeHost automatically.
-ImagePreprocessor::~ImagePreprocessor() = default;
+ImagePreprocessor::~ImagePreprocessor() {
+    if (staging_done_) cudaEventDestroy(staging_done_);
+}
 
 void ImagePreprocessor::set_mean(float r, float g, float b) noexcept {
     mean_[0] = r;
@@ -145,6 +149,13 @@ void ImagePreprocessor::process(const cv::Mat& image, float* d_dst, cudaStream_t
     const int cols = image.cols;
     const std::size_t bytes_per_row = static_cast<std::size_t>(cols) * 3;
     const std::size_t total_bytes   = bytes_per_row * static_cast<std::size_t>(rows);
+
+    // Wait for the previous call to stop using the staging buffers before we
+    // overwrite them (host memcpy below) or free them (ensure_capacity_).
+    // Back-to-back batch preprocessing hits this; in steady-state single-image
+    // use the event completed long ago, so the wait is free.
+    RFDETR_CUDA_CHECK(cudaEventSynchronize(staging_done_));
+
     ensure_capacity_(total_bytes);
 
     // Copy host cv::Mat (which may have step != cols*3) into a contiguous pinned buffer.
@@ -164,6 +175,10 @@ void ImagePreprocessor::process(const cv::Mat& image, float* d_dst, cudaStream_t
     launch_square_resize_normalize(stream, d_src_raw, rows, cols,
                                     static_cast<int>(bytes_per_row), d_dst, R_,
                                     src_is_bgr_, mean_, std_);
+
+    // Record after the kernel: it reads d_src_, so the staging buffers stay
+    // live until it retires, not merely until the H2D copy lands.
+    RFDETR_CUDA_CHECK(cudaEventRecord(staging_done_, stream));
 }
 
 }  // namespace rfdetr

@@ -14,8 +14,9 @@ JSON schema expected (from rfdetr_bench):
         "task":         "detection" | "segmentation",
         "batch":        int,
         "trt_version":  str,
-        "latency_ms":   {"mean": float, "p50": float, "p90": float, "p99": float, ...},
-        "gpu_ms":       {"mean": float, ...},
+        "latency_ms":   {"avg": float, "p50": float, "p90": float, "p99": float, ...},
+        "infer_ms":     {"avg": float, ...},
+        "postprocess_ms": {"avg": float, ...},
         "throughput_fps": float,
     }
 """
@@ -60,7 +61,7 @@ def build_table(results: list[dict], csv_mode: bool = False) -> str:
     headers = [
         "Device", "Variant", "Task", "Prec.", "Batch",
         "Lat mean (ms)", "Lat p50", "Lat p90", "Lat p99",
-        "GPU mean (ms)", "Throughput (fps)",
+        "Infer mean (ms)", "Post mean (ms)", "Throughput (fps)",
         "TRT",
     ]
 
@@ -70,18 +71,23 @@ def build_table(results: list[dict], csv_mode: bool = False) -> str:
         x.get("batch", 1)
     )):
         lat = r.get("latency_ms", {})
-        gpu = r.get("gpu_ms", {})
+        # Older reports carry a "gpu_ms" block from the removed cudaEvent timing.
+        # Those numbers measured event overhead on an idle stream, not device
+        # work, so they are not shown — the stage breakdown replaces them.
+        infer = r.get("infer_ms", {})
+        post = r.get("postprocess_ms", {})
         rows.append([
             r.get("device", "?"),
             r.get("variant", "?"),
             r.get("task", "detection"),
             r.get("precision", "?"),
             str(r.get("batch", 1)),
-            fmt_float(lat.get("mean")),
+            fmt_float(lat.get("avg")),
             fmt_float(lat.get("p50")),
             fmt_float(lat.get("p90")),
             fmt_float(lat.get("p99")),
-            fmt_float(gpu.get("mean")),
+            fmt_float(infer.get("avg")),
+            fmt_float(post.get("avg")),
             fmt_float(r.get("throughput_fps")),
             r.get("trt_version", "?"),
         ])
