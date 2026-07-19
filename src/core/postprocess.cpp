@@ -126,8 +126,10 @@ void decode_masks(const float* masks_logits, int mask_h, int mask_w,
 
     if (stream) {
         // GPU path: bilinear upsample + threshold entirely on device.
+        // No persistent scratch here — this entry point allocates per call.
+        // Hot paths should use gpu_decode_masks() with a reused scratch.
         gpu_decode_masks(masks_logits, query_indices, mask_h, mask_w,
-                         img_h, img_w, detections, stream);
+                         img_h, img_w, detections, nullptr, stream);
         return;
     }
 

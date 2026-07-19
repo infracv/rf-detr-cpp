@@ -6,6 +6,7 @@
 #include "rfdetr/core/postprocess.hpp"
 #include "../internal/cuda_check.hpp"
 #include "../internal/cuda_preprocess.cuh"
+#include "../internal/mask_decode.cuh"
 #include "../internal/trt_session.hpp"
 
 #include <NvInferRuntime.h>
@@ -38,6 +39,9 @@ struct RFDetrSegmenter::Impl {
 
     PostprocessParams pp;
     Timings           timings;
+
+    // Reused across frames — see MaskDecodeScratch.
+    MaskDecodeScratchPtr mask_scratch{make_mask_decode_scratch()};
 
     bool            graph_captured{false};
     cudaGraph_t     graph{nullptr};
@@ -192,6 +196,15 @@ struct RFDetrSegmenter::Impl {
     Detections run(const cv::Mat& image, float threshold) {
         using Clock = std::chrono::steady_clock;
 
+        // A dynamic-batch engine resolves no shapes until one is set, so the
+        // input binding has no device buffer yet — and a prior segment_batch()
+        // may have left the profile at B>1. set_input_shape early-returns when
+        // the shape is already correct, so the steady-state cost is a compare.
+        if (meta.dynamic_batch) {
+            const int R = meta.input_h;
+            session.set_input_shape("input", nvinfer1::Dims4{1, 3, R, R});
+        }
+
         float* d_input = static_cast<float*>(session.device_buffer("input"));
 
         // Preprocess queued on the session stream — no host sync; infer sees
@@ -204,9 +217,14 @@ struct RFDetrSegmenter::Impl {
             RFDETR_CUDA_CHECK(cudaStreamSynchronize(session.stream()));
         } else {
             session.infer();
-            session.get_output_f32(b_dets->name,   h_dets.data(),   h_dets.size());
-            session.get_output_f32(b_labels->name, h_labels.data(), h_labels.size());
-            session.get_output_f32(b_masks->name,  h_masks.data(),  h_masks.size());
+            // Explicit batch-1 counts: segment_batch() may have grown h_*, and
+            // get_output_f32 requires an exact element count.
+            session.get_output_f32(b_dets->name,   h_dets.data(),
+                                   static_cast<std::size_t>(N) * 4);
+            session.get_output_f32(b_labels->name, h_labels.data(),
+                                   static_cast<std::size_t>(N) * C);
+            session.get_output_f32(b_masks->name,  h_masks.data(),
+                                   static_cast<std::size_t>(N) * mH * mW);
         }
         const auto t1 = t0;  // preprocess merged into infer_ms
         const auto t2 = Clock::now();
@@ -215,8 +233,8 @@ struct RFDetrSegmenter::Impl {
         std::vector<int> query_idx;
         Detections results = decode_detections_with_queries(
             h_dets.data(), h_labels.data(), image.cols, image.rows, pp, query_idx);
-        decode_masks(h_masks.data(), mH, mW, query_idx, image.cols, image.rows, results,
-                     session.stream());
+        gpu_decode_masks(h_masks.data(), query_idx, mH, mW, image.rows, image.cols,
+                         results, mask_scratch.get(), session.stream());
         const auto t3 = Clock::now();
 
         auto ms = [](auto a, auto b) {
@@ -279,8 +297,8 @@ struct RFDetrSegmenter::Impl {
             std::vector<int> q;
             Detections r = decode_detections_with_queries(d, l, images[i].cols,
                                                            images[i].rows, pp, q);
-            decode_masks(m, mH, mW, q, images[i].cols, images[i].rows, r,
-                         session.stream());
+            gpu_decode_masks(m, q, mH, mW, images[i].rows, images[i].cols, r,
+                             mask_scratch.get(), session.stream());
             results.push_back(std::move(r));
         }
         return results;

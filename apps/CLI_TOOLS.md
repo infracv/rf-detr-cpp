@@ -23,10 +23,17 @@ Convert an ONNX model to a TensorRT engine.
     --engine trt-files/onnx/rf-detr-nano-int8.engine \
     --precision fp32
 
-# Dynamic batch (max 4 images)
-./build/rfdetr_build --onnx trt-files/onnx/rf-detr-nano.onnx \
-    --min-batch 1 --opt-batch 2 --max-batch 4
+# Dynamic batch (max 4 images) — the ONNX must be exported with --dynamic-batch,
+# otherwise its batch dimension is baked to 1 and this build fails.
+python trt-files/scripts/export_onnx.py --variant nano --dynamic-batch \
+    --out-dir trt-files/onnx --name rf-detr-nano-dyn
+./build/rfdetr_build --onnx trt-files/onnx/rf-detr-nano-dyn.onnx --precision fp16 \
+    --min-batch 1 --opt-batch 4 --max-batch 4
 ```
+
+TensorRT tunes kernels for `--opt-batch`, so set it to the batch size you will
+actually run. A dynamic engine is slightly slower at batch 1 than a static one —
+keep both if you need lowest single-frame latency as well as batch throughput.
 
 Options:
 
@@ -94,15 +101,33 @@ Run detection on a video file or live camera stream.
 
 ## rfdetr_batch
 
-Run detection on multiple images in a single engine call.
-Requires an engine built with `--max-batch N`.
+Time batched detection throughput. Takes **one** image and replicates it `--batch N`
+times — it is a throughput benchmark, not a tool for processing a set of images.
+Requires a **dynamic-batch** engine when `N > 1`; see `rfdetr_build` above.
 
 ```sh
 ./build/rfdetr_batch \
-    --engine trt-files/onnx/rf-detr-nano-fp16.engine \
-    --images img1.jpg img2.jpg img3.jpg \
+    --engine trt-files/onnx/rf-detr-nano-dyn-fp16.engine \
+    --image  asset/test_img.jpg \
+    --batch  4 \
     --threshold 0.5
 ```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--engine` | required | Engine built with `--max-batch >= N` |
+| `--image` | required | Image replicated across the batch |
+| `--batch` | `2` | Batch size |
+| `--threshold` | `0.5` | Score threshold |
+| `--iters` | `20` | Timing iterations |
+| `--out-dir` | | Write annotated `batch_0.jpg` … |
+
+To batch *distinct* images, call `detect_batch()` / `segment_batch()` from C++
+directly — see the [README](../README.md#batch-inference).
+
+Batching trades latency for throughput: it amortizes launch overhead and fills
+the GPU, but no image completes until the whole batch does. Use it for offline
+work over a set of images, not for a live camera feed.
 
 ---
 

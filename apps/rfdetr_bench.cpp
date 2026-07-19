@@ -7,7 +7,6 @@
 //   rfdetr_bench camera <engine> <cam_id> [options]
 
 #include "cli_helpers.hpp"
-#include "rfdetr/core/cuda_check.hpp"
 #include "rfdetr/core/engine_meta.hpp"
 #include "rfdetr/tasks/detector.hpp"
 #include "rfdetr/tasks/segmenter.hpp"
@@ -173,11 +172,29 @@ struct BenchmarkConfig {
     bool        verbose{true};
 };
 
+// Per-frame stage breakdown, taken from the task's last_timings().
+struct FrameResult {
+    int    ndet{};
+    double infer_ms{};
+    double post_ms{};
+};
+
 struct BenchmarkMetrics {
     double load_ms{};
     double warmup_ms{};
     LatencyStats latency;        // wall time (preprocess + infer + postprocess)
-    LatencyStats gpu_latency;    // GPU-only (cudaEvent)
+    // Stage breakdown, sourced from the library's own timers.
+    //
+    // `infer` is the GPU pipeline as observed from the host: the preprocess
+    // kernel and H2D are enqueued on the session stream and awaited by the
+    // sync inside run(), so preprocess is folded in here. The library
+    // deliberately omits a host sync between preprocess and infer (see the
+    // comment in detector.cpp run()), which is why it cannot be split out
+    // without making the library slower than it is in production.
+    //
+    // `post` is pure CPU decode (plus mask decode for segmentation).
+    LatencyStats infer_latency;
+    LatencyStats post_latency;
     double fps{};
     int    frame_count{};
     double cpu_usage_avg{};
@@ -206,9 +223,12 @@ BenchmarkMetrics run_loop(InferFn infer_fn,
                           const BenchmarkConfig& cfg) {
     BenchmarkMetrics m;
 
-    cudaEvent_t ev0, ev1;
-    RFDETR_CUDA_CHECK(cudaEventCreate(&ev0));
-    RFDETR_CUDA_CHECK(cudaEventCreate(&ev1));
+    // NOTE: an earlier version bracketed each iteration with a cudaEvent pair
+    // recorded on the default stream. TrtSession creates its stream with
+    // cudaStreamNonBlocking, so the null stream never synchronised with it and
+    // both events landed on an idle stream — the "GPU time" they reported was
+    // event-record overhead, not device work. The stage breakdown below comes
+    // from the library's own timers instead, which measure the real pipeline.
 
     // Warm up
     auto wt0 = std::chrono::steady_clock::now();
@@ -217,9 +237,10 @@ BenchmarkMetrics run_loop(InferFn infer_fn,
     m.warmup_ms = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - wt0).count();
 
-    std::vector<double> wall_ms, gpu_ms;
+    std::vector<double> wall_ms, infer_ms, post_ms;
     wall_ms.reserve(static_cast<std::size_t>(cfg.iters));
-    gpu_ms.reserve(static_cast<std::size_t>(cfg.iters));
+    infer_ms.reserve(static_cast<std::size_t>(cfg.iters));
+    post_ms.reserve(static_cast<std::size_t>(cfg.iters));
 
     std::vector<double> cpu_s, gpu_s;
     double gpu_mem_first = 0;
@@ -237,30 +258,23 @@ BenchmarkMetrics run_loop(InferFn infer_fn,
         gpu_s.push_back(gs.util);
         if (i == 0) gpu_mem_first = gs.mem_mb;
 
-        RFDETR_CUDA_CHECK(cudaEventRecord(ev0));
         auto t0 = std::chrono::steady_clock::now();
-        int nd = infer_fn(f);
-        RFDETR_CUDA_CHECK(cudaEventRecord(ev1));
-        RFDETR_CUDA_CHECK(cudaEventSynchronize(ev1));
+        FrameResult r = infer_fn(f);
         auto t1 = std::chrono::steady_clock::now();
 
-        float gpu_el = 0;
-        RFDETR_CUDA_CHECK(cudaEventElapsedTime(&gpu_el, ev0, ev1));
-
         wall_ms.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
-        gpu_ms.push_back(static_cast<double>(gpu_el));
-        total_det += nd;
+        infer_ms.push_back(r.infer_ms);
+        post_ms.push_back(r.post_ms);
+        total_det += r.ndet;
 
         if (cfg.verbose) bar.update(i + 1);
     }
     if (cfg.verbose) bar.finish();
 
-    cudaEventDestroy(ev0);
-    cudaEventDestroy(ev1);
-
-    m.latency     = LatencyStats::compute(wall_ms);
-    m.gpu_latency = LatencyStats::compute(gpu_ms);
-    m.fps         = 1000.0 / m.latency.avg;
+    m.latency       = LatencyStats::compute(wall_ms);
+    m.infer_latency = LatencyStats::compute(infer_ms);
+    m.post_latency  = LatencyStats::compute(post_ms);
+    m.fps           = 1000.0 / m.latency.avg;
     m.frame_count = cfg.iters;
     m.avg_detections = total_det / cfg.iters;
     if (!cpu_s.empty())
@@ -305,12 +319,21 @@ static void print_metrics(const BenchmarkConfig& cfg, const BenchmarkMetrics& m,
     std::cout << "  P50:   " << m.latency.p50 << "   P90: " << m.latency.p90
               << "   P95: " << m.latency.p95 << "   P99: " << m.latency.p99 << "\n\n";
 
-    std::cout << c("LATENCY (GPU only — cudaEvent)  ms", YELLOW) << "\n";
+    std::cout << c("STAGE BREAKDOWN  ms", YELLOW) << "\n";
     std::cout << c(std::string(36, '-'), DIM) << "\n";
-    std::cout << "  Avg:   " << m.gpu_latency.avg
-              << "   StdDev: " << m.gpu_latency.stddev << "\n";
-    std::cout << "  P50:   " << m.gpu_latency.p50 << "   P90: " << m.gpu_latency.p90
-              << "   P99: " << m.gpu_latency.p99 << "\n\n";
+    const double share = (m.latency.avg > 0.0) ? 100.0 / m.latency.avg : 0.0;
+    std::cout << "  Infer (preprocess + GPU + sync)\n";
+    std::cout << "    Avg: " << m.infer_latency.avg
+              << "   P50: " << m.infer_latency.p50
+              << "   P99: " << m.infer_latency.p99
+              << "   (" << std::setprecision(1) << m.infer_latency.avg * share << "% of wall)\n";
+    std::cout << std::setprecision(3);
+    std::cout << "  Postprocess (CPU decode)\n";
+    std::cout << "    Avg: " << m.post_latency.avg
+              << "   P50: " << m.post_latency.p50
+              << "   P99: " << m.post_latency.p99
+              << "   (" << std::setprecision(1) << m.post_latency.avg * share << "% of wall)\n\n";
+    std::cout << std::setprecision(3);
 
     std::cout << c("RESOURCE USAGE", YELLOW) << "\n" << c(std::string(36, '-'), DIM) << "\n";
     std::cout << "  CPU usage avg:  " << std::setprecision(1) << m.cpu_usage_avg << "%\n";
@@ -343,7 +366,8 @@ static void export_json(const std::string& path, const BenchmarkConfig& cfg,
     j["warmup_iters"]   = cfg.warmup;
     j["measure_iters"]  = cfg.iters;
     j["latency_ms"]     = lat_json(m.latency);
-    j["gpu_ms"]         = lat_json(m.gpu_latency);
+    j["infer_ms"]       = lat_json(m.infer_latency);
+    j["postprocess_ms"] = lat_json(m.post_latency);
     j["throughput_fps"] = m.fps;
     j["cpu_usage_avg"]  = m.cpu_usage_avg;
     j["gpu_usage_avg"]  = m.gpu_usage_avg;
@@ -358,19 +382,45 @@ static void export_json(const std::string& path, const BenchmarkConfig& cfg,
 static void export_csv(const std::string& path, const BenchmarkConfig& cfg,
                        const BenchmarkMetrics& m, const rfdetr::EngineMeta& meta,
                        bool have_meta, const std::string& input_type) {
+    static constexpr const char* kHeader =
+        "timestamp,model_type,task_type,input_type,device,precision,input_shape,"
+        "load_ms,warmup_ms,frames,"
+        "latency_avg,latency_stddev,latency_min,latency_max,"
+        "latency_p50,latency_p90,latency_p95,latency_p99,"
+        "infer_avg,infer_p50,infer_p99,"
+        "post_avg,post_p50,post_p99,"
+        "fps,throughput,"
+        "cpu_usage,gpu_usage,gpu_memory_mb,"
+        "avg_detections,"
+        "trt_version,cuda_version";
+
     fs::create_directories(fs::path(path).parent_path());
-    bool exists = fs::exists(path);
-    std::ofstream f(path, std::ios::app);
+
+    // Never append under a mismatched header — the columns would silently
+    // misalign. Divert to a sibling file rather than throwing away a run that
+    // just took real wall-clock time to produce.
+    std::string out_path = path;
+    if (fs::exists(out_path)) {
+        std::ifstream in(out_path);
+        std::string first;
+        std::getline(in, first);
+        if (!first.empty() && first.back() == '\r') first.pop_back();
+        if (!first.empty() && first != kHeader) {
+            fs::path p(out_path);
+            out_path = (p.parent_path() / (p.stem().string() + "_v2" + p.extension().string()))
+                           .string();
+            std::fprintf(stderr,
+                "  warning: '%s' uses the older column schema (its GPU-timing columns\n"
+                "           were replaced by a real stage breakdown). Writing to '%s'\n"
+                "           instead. Archive the old file to consolidate.\n",
+                path.c_str(), out_path.c_str());
+        }
+    }
+
+    const bool exists = fs::exists(out_path);
+    std::ofstream f(out_path, std::ios::app);
     if (!exists) {
-        f << "timestamp,model_type,task_type,input_type,device,precision,input_shape,"
-             "load_ms,warmup_ms,frames,"
-             "latency_avg,latency_stddev,latency_min,latency_max,"
-             "latency_p50,latency_p90,latency_p95,latency_p99,"
-             "gpu_latency_avg,gpu_latency_p50,gpu_latency_p99,"
-             "fps,throughput,"
-             "cpu_usage,gpu_usage,gpu_memory_mb,"
-             "avg_detections,"
-             "trt_version,cuda_version\n";
+        f << kHeader << "\n";
     }
 
     std::string input_shape = "?";
@@ -390,22 +440,33 @@ static void export_csv(const std::string& path, const BenchmarkConfig& cfg,
       << m.latency.min    << "," << m.latency.max    << ","
       << m.latency.p50    << "," << m.latency.p90    << ","
       << m.latency.p95    << "," << m.latency.p99    << ","
-      << m.gpu_latency.avg << "," << m.gpu_latency.p50 << "," << m.gpu_latency.p99 << ","
+      << m.infer_latency.avg << "," << m.infer_latency.p50 << "," << m.infer_latency.p99 << ","
+      << m.post_latency.avg  << "," << m.post_latency.p50  << "," << m.post_latency.p99  << ","
       << std::setprecision(2)
       << m.fps << "," << m.fps << ","    // throughput == fps for batch=1
       << std::setprecision(1)
       << m.cpu_usage_avg << "," << m.gpu_usage_avg << "," << m.gpu_memory_mb << ","
       << m.avg_detections << ","
       << trt_ver() << "," << cuda_ver() << "\n";
-    std::printf("  CSV appended -> %s\n", path.c_str());
+    std::printf("  CSV appended -> %s\n", out_path.c_str());
 }
 
-static int run_det(rfdetr::RFDetrDetector& det, const cv::Mat& f, float thr) {
-    return static_cast<int>(det.detect(f, thr).size());
+static FrameResult run_det(rfdetr::RFDetrDetector& det, const cv::Mat& f, float thr) {
+    FrameResult r;
+    r.ndet = static_cast<int>(det.detect(f, thr).size());
+    const auto& t = det.last_timings();
+    r.infer_ms = t.infer_ms;
+    r.post_ms  = t.postprocess_ms;
+    return r;
 }
 
-static int run_seg(rfdetr::RFDetrSegmenter& seg, const cv::Mat& f, float thr) {
-    return static_cast<int>(seg.segment(f, thr).size());
+static FrameResult run_seg(rfdetr::RFDetrSegmenter& seg, const cv::Mat& f, float thr) {
+    FrameResult r;
+    r.ndet = static_cast<int>(seg.segment(f, thr).size());
+    const auto& t = seg.last_timings();
+    r.infer_ms = t.infer_ms;
+    r.post_ms  = t.postprocess_ms;
+    return r;
 }
 
 // Dispatch helper: builds either a detector or segmenter and returns a

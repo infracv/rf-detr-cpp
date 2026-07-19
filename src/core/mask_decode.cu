@@ -65,14 +65,62 @@ __global__ void maskDecodeKernel(const float*         __restrict__ d_logits,
 
 }  // namespace
 
+// Grow-only staging buffers. Reallocation is rare after the first few frames,
+// so the steady-state cost of a decode is the copies and the kernel alone.
+struct MaskDecodeScratch {
+    HostPtr h_logits, h_idx, h_masks;
+    DevPtr  d_logits, d_idx, d_masks;
+    std::size_t cap_h_logits{0}, cap_h_idx{0}, cap_h_masks{0};
+    std::size_t cap_d_logits{0}, cap_d_idx{0}, cap_d_masks{0};
+
+    static void grow_host(HostPtr& p, std::size_t& cap, std::size_t need) {
+        if (cap >= need) return;
+        void* raw = nullptr;
+        RFDETR_CUDA_CHECK(cudaMallocHost(&raw, need));
+        p.reset(raw);  // releases the previous allocation
+        cap = need;
+    }
+
+    static void grow_dev(DevPtr& p, std::size_t& cap, std::size_t need) {
+        if (cap >= need) return;
+        void* raw = nullptr;
+        RFDETR_CUDA_CHECK(cudaMalloc(&raw, need));
+        p.reset(raw);
+        cap = need;
+    }
+
+    void reserve(std::size_t logit_bytes, std::size_t idx_bytes, std::size_t mask_bytes) {
+        grow_host(h_logits, cap_h_logits, logit_bytes);
+        grow_host(h_idx,    cap_h_idx,    idx_bytes);
+        grow_host(h_masks,  cap_h_masks,  mask_bytes);
+        grow_dev (d_logits, cap_d_logits, logit_bytes);
+        grow_dev (d_idx,    cap_d_idx,    idx_bytes);
+        grow_dev (d_masks,  cap_d_masks,  mask_bytes);
+    }
+};
+
+void MaskDecodeScratchDeleter::operator()(MaskDecodeScratch* p) const noexcept {
+    delete p;
+}
+
+MaskDecodeScratchPtr make_mask_decode_scratch() {
+    return MaskDecodeScratchPtr(new MaskDecodeScratch());
+}
+
 void gpu_decode_masks(const float*            h_masks_logits,
                       const std::vector<int>& query_indices,
                       int mH, int mW,
                       int imgH, int imgW,
                       Detections&             detections,
+                      MaskDecodeScratch*      scratch,
                       void*                   cuda_stream) {
     const int num_dets = static_cast<int>(detections.size());
     if (num_dets == 0 || !h_masks_logits) return;
+    if (mH <= 0 || mW <= 0 || imgH <= 0 || imgW <= 0) return;
+    // The index-staging loop below walks num_dets entries; a short vector would
+    // read out of range. Callers reaching this directly skip decode_masks()'
+    // checks, so validate here too.
+    if (query_indices.size() != detections.size()) return;
 
     auto stream = static_cast<cudaStream_t>(cuda_stream);
 
@@ -87,21 +135,18 @@ void gpu_decode_masks(const float*            h_masks_logits,
     const std::size_t mask_plane  = static_cast<std::size_t>(imgH) * imgW;
     const std::size_t mask_bytes  = static_cast<std::size_t>(num_dets) * mask_plane;
 
-    // Pinned host staging
-    void* h_logits_raw = nullptr;  void* h_idx_raw   = nullptr;
-    void* h_masks_raw  = nullptr;
-    RFDETR_CUDA_CHECK(cudaMallocHost(&h_logits_raw, logit_bytes));
-    RFDETR_CUDA_CHECK(cudaMallocHost(&h_idx_raw,    idx_bytes));
-    RFDETR_CUDA_CHECK(cudaMallocHost(&h_masks_raw,  mask_bytes));
-    HostPtr h_logits(h_logits_raw), h_idx(h_idx_raw), h_masks(h_masks_raw);
+    // Reuse the caller's staging when provided; otherwise fall back to a
+    // call-scoped scratch so the standalone entry point keeps working.
+    MaskDecodeScratch  local;
+    MaskDecodeScratch& buf = scratch ? *scratch : local;
+    buf.reserve(logit_bytes, idx_bytes, mask_bytes);
 
-    // Device buffers
-    void* d_logits_raw = nullptr;  void* d_idx_raw   = nullptr;
-    void* d_masks_raw  = nullptr;
-    RFDETR_CUDA_CHECK(cudaMalloc(&d_logits_raw, logit_bytes));
-    RFDETR_CUDA_CHECK(cudaMalloc(&d_idx_raw,    idx_bytes));
-    RFDETR_CUDA_CHECK(cudaMalloc(&d_masks_raw,  mask_bytes));
-    DevPtr d_logits(d_logits_raw), d_idx(d_idx_raw), d_masks(d_masks_raw);
+    const HostPtr& h_logits = buf.h_logits;
+    const HostPtr& h_idx    = buf.h_idx;
+    const HostPtr& h_masks  = buf.h_masks;
+    const DevPtr&  d_logits = buf.d_logits;
+    const DevPtr&  d_idx    = buf.d_idx;
+    const DevPtr&  d_masks  = buf.d_masks;
 
     std::memcpy(h_logits.get(), h_masks_logits, logit_bytes);
     auto* h_idx_i32 = static_cast<std::int32_t*>(h_idx.get());
