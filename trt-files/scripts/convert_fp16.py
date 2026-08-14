@@ -127,8 +127,45 @@ def convert_to_fp16(model: onnx.ModelProto,
                 patched += 1
                 break
 
+    # 6. Re-insert an input cast when a kept-FP32 input feeds FP16 compute with no
+    #    cast in between. In the FP32 graph, input→Cast(f32→f32)→conv is a no-op,
+    #    so graph simplifiers (onnxslim) legitimately delete it — leaving an FP32
+    #    input wired straight into an FP16 kernel, which TRT rejects
+    #    ("input and kernel must be of same type"). Bridge it back.
+    inserted = 0
+    if keep_io_fp32:
+        # Metadata ops are dtype-agnostic; leaving them on the FP32 input is fine.
+        DTYPE_AGNOSTIC = {"Shape", "Size"}
+        producers = {o for n in graph.node for o in n.output}
+        for inp in graph.input:
+            if inp.type.tensor_type.elem_type != TensorProto.FLOAT:
+                continue
+            consumers = [n for n in graph.node if inp.name in n.input]
+            # Already bridged? (normal, non-simplified export)
+            already = any(
+                n.op_type == "Cast" and any(
+                    a.name == "to" and a.i == TensorProto.FLOAT16 for a in n.attribute)
+                for n in consumers)
+            needs = [n for n in consumers if n.op_type not in DTYPE_AGNOSTIC
+                     and n.op_type != "Cast"]
+            if already or not needs:
+                continue
+            cast_out = inp.name + "_fp16"
+            while cast_out in producers:
+                cast_out += "_"
+            cast_node = helper.make_node(
+                "Cast", inputs=[inp.name], outputs=[cast_out],
+                to=TensorProto.FLOAT16, name=inp.name + "/InputCastFP16")
+            graph.node.insert(0, cast_node)
+            for n in needs:
+                for i, name in enumerate(n.input):
+                    if name == inp.name:
+                        n.input[i] = cast_out
+            inserted += 1
+
     print(f"  Initializers converted to FP16 : {len(converted)}")
     print(f"  Cast(to=FLOAT) → Cast(to=FP16): {patched}")
+    print(f"  Input casts re-inserted        : {inserted}")
 
     return model
 

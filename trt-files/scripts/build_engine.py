@@ -36,6 +36,11 @@ def main():
     ap.add_argument("--out", default=None,
                     help="output engine path (default: <onnx>.engine)")
     ap.add_argument("--precision", choices=["fp32", "fp16", "int8"], default="fp16")
+    ap.add_argument("--slim", dest="slim", action="store_true", default=None,
+                    help="simplify the ONNX with onnxslim before building. "
+                         "On by default for FP32; ignored for fp16/int8.")
+    ap.add_argument("--no-slim", dest="slim", action="store_false",
+                    help="disable the onnxslim pass (FP32).")
     ap.add_argument("--int8-calib", default=None, help="(int8 only) path to .calib cache")
     ap.add_argument("--workspace-mib", type=int, default=4096,
                     help="workspace memory pool size in MiB (default: 4096)")
@@ -62,6 +67,34 @@ def main():
 
     engine_path = Path(args.out) if args.out else onnx_path.with_suffix(".engine")
     out_meta = engine_path.with_suffix(".json")
+
+    # onnxslim pass. FP32 only, and ON BY DEFAULT there — it roughly halves the
+    # graph for a lossless ~6-9% engine speedup. Explicitly disabled for fp16/int8:
+    # its fusions reduce FP16 numerical headroom and trigger RF-DETR's attention
+    # overflow, degrading accuracy. `--no-slim` opts out; explicit `--slim` on a
+    # non-FP32 precision is a hard error (the user asked for something unsafe).
+    if args.slim and args.precision != "fp32":
+        sys.exit("--slim is FP32 only (onnxslim degrades FP16/INT8 accuracy)")
+    do_slim = args.slim if args.slim is not None else (args.precision == "fp32")
+    if do_slim:
+        try:
+            from onnxslim import slim
+            import onnx
+            model = onnx.load(str(onnx_path))
+            n0 = len(model.graph.node)
+            model = slim(model)
+            slim_path = onnx_path.with_name(onnx_path.stem + "-slim.onnx")
+            onnx.save(model, str(slim_path))
+            print(f"[build_engine] onnxslim: {n0} -> {len(model.graph.node)} nodes "
+                  f"-> {slim_path}")
+            onnx_path = slim_path
+        except ImportError:
+            # Default-on must not break a build when onnxslim isn't installed.
+            # An explicit --slim still fails loudly.
+            if args.slim:
+                sys.exit("--slim requires onnxslim: pip install onnxslim")
+            print("[build_engine] onnxslim not installed; building without it "
+                  "(pip install onnxslim for a faster FP32 engine)")
 
     if shutil.which(args.trtexec) is None and not Path(args.trtexec).is_file():
         sys.exit(f"trtexec not found: {args.trtexec}")

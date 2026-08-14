@@ -82,6 +82,7 @@ struct Args {
     int opt_batch{1};
     int max_batch{1};
     bool cuda_graph_compat{false};
+    int  slim{-1};                           // -1 auto (on for fp32), 0 off, 1 on
     bool verbose{false};
 };
 
@@ -111,6 +112,9 @@ void usage(const char* argv0) {
         "  --max-batch N             Dynamic profile max  (default: 1)\n"
         "                            If max > 1 (or ONNX has dynamic batch) an\n"
         "                            optimization profile is added.\n"
+        "  --slim / --no-slim        Simplify the ONNX with onnxslim before building.\n"
+        "                            On by default for fp32 (lossless, faster engine);\n"
+        "                            off for fp16/int8. --no-slim opts out.\n"
         "  --verbose                 TRT logger at VERBOSE severity.\n"
         "\n"
         "rfdetr v%s\n",
@@ -134,6 +138,8 @@ Args parse_args(int argc, char** argv) {
         else if (starts_with(arg, "--opt-batch"))    a.opt_batch = parse_int(next_value(argc, argv, i, "--opt-batch"), "--opt-batch");
         else if (starts_with(arg, "--max-batch"))    a.max_batch = parse_int(next_value(argc, argv, i, "--max-batch"), "--max-batch");
         else if (arg == "--cuda-graph")              a.cuda_graph_compat = true;
+        else if (arg == "--slim")                    a.slim = 1;
+        else if (arg == "--no-slim")                 a.slim = 0;
         else if (arg == "--verbose")                 a.verbose = true;
         else {
             throw std::runtime_error("unknown arg: " + std::string(arg));
@@ -146,6 +152,10 @@ Args parse_args(int argc, char** argv) {
     }
     if (a.precision != "fp32" && a.precision != "fp16" && a.precision != "int8") {
         throw std::runtime_error("--precision must be fp32, fp16, or int8");
+    }
+    if (a.slim == 1 && a.precision != "fp32") {
+        throw std::runtime_error(
+            "--slim is FP32 only (onnxslim degrades FP16/INT8 accuracy)");
     }
     if (a.precision == "int8" && a.calib.empty()) {
         throw std::runtime_error(
@@ -233,6 +243,42 @@ int main(int argc, char** argv) {
         args.onnx = fp16_tmp_onnx;
     }
 #endif
+
+    // FP32: simplify the ONNX with onnxslim before parsing. On by default for FP32
+    // (halves the graph for a lossless ~6-9% speedup); never for fp16/int8, where
+    // onnxslim's fusions reduce numerical headroom and hurt accuracy. Mirrors the
+    // convert_fp16.py shell-out above.
+    std::filesystem::path slim_tmp_onnx;
+    const bool do_slim = (args.slim == 1) ||
+                         (args.slim < 0 && args.precision == "fp32");
+    if (do_slim) {
+        const std::filesystem::path script{"trt-files/scripts/slim_onnx.py"};
+        if (!std::filesystem::is_regular_file(script)) {
+            std::fprintf(stderr,
+                "error: trt-files/scripts/slim_onnx.py not found.\n"
+                "       Run rfdetr_build from the project root directory.\n");
+            return 1;
+        }
+        slim_tmp_onnx = args.onnx.parent_path() /
+                        (args.onnx.stem().string() + "-slim-tmp.onnx");
+        std::printf("[rfdetr_build] onnxslim: simplifying ONNX graph (FP32)...\n");
+        const std::string cmd = "python \"" + script.string() + "\""
+                              + " --onnx \"" + args.onnx.string() + "\""
+                              + " --out \""  + slim_tmp_onnx.string() + "\"";
+        if (std::system(cmd.c_str()) == 0 &&
+                std::filesystem::is_regular_file(slim_tmp_onnx)) {
+            args.onnx = slim_tmp_onnx;
+        } else if (args.slim == 1) {
+            std::fprintf(stderr,
+                "error: onnxslim step failed (install it: pip install onnxslim)\n");
+            return 1;
+        } else {
+            // Default-on must not break a build when onnxslim is unavailable.
+            std::fprintf(stderr,
+                "[rfdetr_build] onnxslim unavailable; building without it "
+                "(pip install onnxslim for a faster FP32 engine)\n");
+        }
+    }
 
     rfdetr::TrtLogger logger{args.verbose ? nvinfer1::ILogger::Severity::kVERBOSE
                                           : nvinfer1::ILogger::Severity::kWARNING};

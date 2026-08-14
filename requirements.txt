@@ -1,4 +1,7 @@
-# Python dependencies for the ONNX export script.
+# Python dependencies for the ONNX export and engine-build scripts.
 rfdetr>=1.7.0
 onnx>=1.15
 onnxsim>=0.4.36
+# FP32 graph simplification, on by default for fp32 builds
+# (rfdetr_build / build_engine.py --slim). Safe for FP32 only.
+onnxslim>=0.1.40
