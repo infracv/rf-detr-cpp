@@ -201,15 +201,32 @@ Each `Detection.mask` is a `CV_8UC1` cv::Mat of the original image size, with va
 
 ### Batch Inference
 
+Batching requires a **dynamic-batch engine**. Export the ONNX with
+`--dynamic-batch`, then build with a profile:
+
+```sh
+python trt-files/scripts/export_onnx.py --variant nano --dynamic-batch \
+    --out-dir trt-files/onnx --name rf-detr-nano-dyn
+./build/rfdetr_build --onnx trt-files/onnx/rf-detr-nano-dyn.onnx --precision fp16 \
+    --min-batch 1 --opt-batch 4 --max-batch 4
+```
+
 ```cpp
 std::vector<cv::Mat> frames = { img0, img1, img2, img3 };
 
-rfdetr::RFDetrDetector detector("rf-detr-nano-fp32.engine");
+rfdetr::RFDetrDetector detector("rf-detr-nano-dyn-fp16.engine");
 auto batch = detector.detect_batch(frames, 0.5f);
 
 for (std::size_t i = 0; i < batch.size(); ++i)
     std::printf("frame %zu: %zu detections\n", i, batch[i].size());
 ```
+
+`RFDetrSegmenter::segment_batch()` works the same way. Note that batching speeds
+up inference only — segmentation postprocessing scales with output resolution and
+runs per image, so at high resolutions the end-to-end gain is small.
+
+Batching raises throughput at the cost of per-image latency: nothing completes
+until the whole batch does. Prefer single-image inference for live feeds.
 
 ### C ABI (Python / Rust / Go FFI)
 

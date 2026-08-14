@@ -62,6 +62,10 @@ class ImagePreprocessor {
     DevPtr        d_src_;
     HostPtr       h_pinned_;
     std::size_t   capacity_{0};
+    // Signals that the previous call has finished reading the staging buffers.
+    // Consecutive process() calls on one stream (batch preprocessing) would
+    // otherwise overwrite — or reallocate — staging that is still in flight.
+    cudaEvent_t   staging_done_{nullptr};
 };
 
 }  // namespace rfdetr

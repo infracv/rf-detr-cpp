@@ -34,9 +34,11 @@ benchmarks/results/*
 !benchmarks/results/.gitkeep
 !benchmarks/results/benchmark_results.csv
 
-# Internal planning (not for public repo)
-ROADMAP.md
-similar-repo/
+github-works/
+excalidraw.log
+
+# Local test images for batch inference (high-res, too large for git)
+data/
 
 # OS
 .DS_Store
